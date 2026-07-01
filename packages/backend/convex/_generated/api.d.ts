@@ -9,10 +9,15 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as feed from "../feed.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
+import type * as model_deriveListings from "../model/deriveListings.js";
+import type * as model_listings from "../model/listings.js";
+import type * as model_validators from "../model/validators.js";
 import type * as polar from "../polar.js";
 import type * as privateData from "../privateData.js";
+import type * as seed from "../seed.js";
 
 import type {
   ApiFromModules,
@@ -22,10 +27,15 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  feed: typeof feed;
   healthCheck: typeof healthCheck;
   http: typeof http;
+  "model/deriveListings": typeof model_deriveListings;
+  "model/listings": typeof model_listings;
+  "model/validators": typeof model_validators;
   polar: typeof polar;
   privateData: typeof privateData;
+  seed: typeof seed;
 }>;
 
 /**
