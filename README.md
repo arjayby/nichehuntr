@@ -61,7 +61,7 @@ npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
 Import shared components like this:
 
 ```tsx
-import { Button } from "@100k/ui/components/button";
+import { Button } from "@nichehuntr/ui/components/button";
 ```
 
 ### Add app-specific blocks

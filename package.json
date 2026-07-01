@@ -1,5 +1,5 @@
 {
-  "name": "100k",
+  "name": "nichehuntr",
   "private": true,
   "workspaces": {
     "packages": [
@@ -27,17 +27,17 @@
     "build": "turbo build",
     "check-types": "turbo check-types",
     "dev:web": "turbo -F web dev",
-    "dev:server": "turbo -F @100k/backend dev",
-    "dev:setup": "turbo -F @100k/backend dev:setup",
+    "dev:server": "turbo -F @nichehuntr/backend dev",
+    "dev:setup": "turbo -F @nichehuntr/backend dev:setup",
     "check": "biome check --write ."
   },
   "dependencies": {
-    "@100k/env": "workspace:*",
+    "@nichehuntr/env": "workspace:*",
     "dotenv": "^17.4.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@100k/config": "workspace:*",
+    "@nichehuntr/config": "workspace:*",
     "@biomejs/biome": "^2.5.1",
     "turbo": "^2.10.0",
     "typescript": "^6.0.3"

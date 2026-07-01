@@ -1,4 +1,4 @@
-import { api } from "@100k/backend/convex/_generated/api";
+import { api } from "@nichehuntr/backend/convex/_generated/api";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";

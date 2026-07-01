@@ -1,11 +1,11 @@
 {
-  "extends": "@100k/config/tsconfig.base.json",
+  "extends": "@nichehuntr/config/tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "types": [],
     "paths": {
-      "@100k/ui/*": ["./src/*"]
+      "@nichehuntr/ui/*": ["./src/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

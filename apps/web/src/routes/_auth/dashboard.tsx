@@ -1,5 +1,5 @@
-import { api } from "@100k/backend/convex/_generated/api";
-import { buttonVariants } from "@100k/ui/components/button";
+import { api } from "@nichehuntr/backend/convex/_generated/api";
+import { buttonVariants } from "@nichehuntr/ui/components/button";
 import { CheckoutLink, CustomerPortalLink } from "@convex-dev/polar/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "convex/react";

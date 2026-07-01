@@ -1,4 +1,4 @@
-import { Toaster } from "@100k/ui/components/sonner";
+import { Toaster } from "@nichehuntr/ui/components/sonner";
 import { ConvexBetterAuthProvider } from "@convex-dev/better-auth/react";
 import type { ConvexQueryClient } from "@convex-dev/react-query";
 import type { QueryClient } from "@tanstack/react-query";

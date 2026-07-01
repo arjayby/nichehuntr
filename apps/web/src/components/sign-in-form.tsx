@@ -1,6 +1,6 @@
-import { Button } from "@100k/ui/components/button";
-import { Input } from "@100k/ui/components/input";
-import { Label } from "@100k/ui/components/label";
+import { Button } from "@nichehuntr/ui/components/button";
+import { Input } from "@nichehuntr/ui/components/input";
+import { Label } from "@nichehuntr/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";

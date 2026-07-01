@@ -21,7 +21,7 @@
     "noUncheckedSideEffectImports": true,
     "paths": {
       "@/*": ["./src/*"],
-      "@100k/ui/*": ["../../packages/ui/src/*"]
+      "@nichehuntr/ui/*": ["../../packages/ui/src/*"]
     }
   }
 }

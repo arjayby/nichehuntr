@@ -1,4 +1,4 @@
-import { env } from "@100k/env/web";
+import { env } from "@nichehuntr/env/web";
 import { convexBetterAuthReactStart } from "@convex-dev/better-auth/react-start";
 
 export const { handler, getToken, fetchAuthQuery, fetchAuthMutation, fetchAuthAction } =

@@ -1,5 +1,5 @@
 {
-  "name": "@100k/env",
+  "name": "@nichehuntr/env",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@100k/config": "workspace:*",
+    "@nichehuntr/config": "workspace:*",
     "typescript": "catalog:"
   }
 }

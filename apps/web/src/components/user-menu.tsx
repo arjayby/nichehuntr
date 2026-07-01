@@ -1,5 +1,5 @@
-import { api } from "@100k/backend/convex/_generated/api";
-import { Button } from "@100k/ui/components/button";
+import { api } from "@nichehuntr/backend/convex/_generated/api";
+import { Button } from "@nichehuntr/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,7 +8,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@100k/ui/components/dropdown-menu";
+} from "@nichehuntr/ui/components/dropdown-menu";
 import { useQuery } from "convex/react";
 
 import { authClient } from "@/lib/auth-client";

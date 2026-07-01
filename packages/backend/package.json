@@ -1,5 +1,5 @@
 {
-  "name": "@100k/backend",
+  "name": "@nichehuntr/backend",
   "version": "1.0.0",
   "description": "",
   "license": "ISC",
@@ -18,7 +18,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@100k/config": "workspace:*",
+    "@nichehuntr/config": "workspace:*",
     "@types/node": "^24.3.0",
     "typescript": "catalog:"
   }
