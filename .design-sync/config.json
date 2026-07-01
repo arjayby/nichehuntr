@@ -1,0 +1,15 @@
+{
+  "projectId": "360a3e42-f156-4285-9e28-e64ea72bf97d",
+  "shape": "package",
+  "pkg": "@nichehuntr/ui",
+  "globalName": "NichehuntrUI",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": ".ds-css/compiled.css",
+  "extraFonts": ["node_modules/@fontsource-variable/jetbrains-mono/index.css"],
+  "runtimeFontPrefixes": ["Inter Variable", "Cambria"],
+  "readmeHeader": ".design-sync/conventions.md",
+  "buildCmd": "node .design-sync/gen-css.mjs",
+  "overrides": {
+    "DropdownMenu": { "cardMode": "single", "viewport": "380x400" }
+  }
+}

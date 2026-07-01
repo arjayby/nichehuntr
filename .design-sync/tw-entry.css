@@ -1,0 +1,13 @@
+/*
+ * design-sync Tailwind compile entry (committed input).
+ * Pulls in the real DS theme + Tailwind source from packages/ui/src/styles/globals.css
+ * (its @import "tailwindcss" and @source globs resolve relative to that file, so
+ * component utility classes are generated), and additionally scans the authored
+ * preview .tsx files so utilities used only in previews are emitted too.
+ *
+ * Compiled deterministically to packages/ui/.ds-css/compiled.css (gitignored),
+ * which cfg.cssEntry points at. Regenerate with cfg.buildCmd. See .design-sync/NOTES.md.
+ */
+@import "../packages/ui/src/styles/globals.css";
+@source "./previews/**/*.tsx";
+@source "./tw-safelist.tsx";

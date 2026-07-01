@@ -52,3 +52,13 @@ coverage
 .cache
 tmp
 temp
+
+# design-sync (claude.ai/design) — regenerated artifacts, not committed.
+# Durable inputs under .design-sync/ (config.json, NOTES.md, conventions.md,
+# previews/, tw-entry.css, tw-safelist.tsx, gen-css.mjs) ARE committed.
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+packages/ui/.ds-css/
