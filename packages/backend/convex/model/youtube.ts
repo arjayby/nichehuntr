@@ -42,6 +42,15 @@ export type ChannelInfo = {
 /** A point-in-time view count for one video, feeding a `videoSnapshots` row. */
 export type VideoStat = { ytVideoId: string; viewCount: number };
 
+/** Channels that surfaced as related/featured off one already-tracked channel —
+ * the raw material for snowball discovery and the snowball graph (CONTEXT.md). */
+export type RelatedChannels = {
+	/** The YouTube id of the tracked channel we snowballed from. */
+	fromChannelId: string;
+	/** YouTube ids of the channels featured/related off it. */
+	relatedChannelIds: string[];
+};
+
 export type FetchTrendingOptions = {
 	/** ISO 3166 region the trending chart is anchored to. Defaults to US. */
 	regionCode?: string;
@@ -56,6 +65,7 @@ export type YouTubeAdapter = {
 	fetchTrending(opts?: FetchTrendingOptions): Promise<TrendingVideo[]>;
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
 	fetchVideoStats(videoIds: string[]): Promise<VideoStat[]>;
+	fetchRelatedChannels(channelIds: string[]): Promise<RelatedChannels[]>;
 };
 
 /** Split a list into chunks of at most `size` (used to honor the 50-id cap). */
@@ -113,6 +123,9 @@ type ChannelResource = {
 		customUrl?: string;
 		description?: string;
 		thumbnails?: ThumbnailSet;
+	};
+	brandingSettings?: {
+		channel?: { featuredChannelsUrls?: string[] };
 	};
 };
 
@@ -230,6 +243,24 @@ export function createYouTubeAdapter(
 			return items.map((item) => ({
 				ytVideoId: item.id,
 				viewCount: toViewCount(item.statistics?.viewCount),
+			}));
+		},
+
+		async fetchRelatedChannels(channelIds): Promise<RelatedChannels[]> {
+			// Featured channels via `brandingSettings` — 1 unit / 50 ids, never
+			// `search.list` (ADR-0001). YouTube has been paring back related-channel
+			// surfaces, so this can come back empty for many channels; snowball then
+			// simply adds nothing that tick and Saturation leans on the trending
+			// firehose's own niche overlap. Best-effort by design (a humble adapter).
+			const items = await getByIds<ChannelResource>(
+				"channels",
+				"brandingSettings",
+				channelIds,
+			);
+			return items.map((item) => ({
+				fromChannelId: item.id,
+				relatedChannelIds:
+					item.brandingSettings?.channel?.featuredChannelsUrls ?? [],
 			}));
 		},
 	};

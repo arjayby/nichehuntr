@@ -15,6 +15,7 @@ import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
 import type * as model_deriveListings from "../model/deriveListings.js";
+import type * as model_embeddings from "../model/embeddings.js";
 import type * as model_listings from "../model/listings.js";
 import type * as model_validators from "../model/validators.js";
 import type * as model_youtube from "../model/youtube.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   ingest: typeof ingest;
   "model/deriveListings": typeof model_deriveListings;
+  "model/embeddings": typeof model_embeddings;
   "model/listings": typeof model_listings;
   "model/validators": typeof model_validators;
   "model/youtube": typeof model_youtube;

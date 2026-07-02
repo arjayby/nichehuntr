@@ -1,14 +1,17 @@
 /**
- * Live ingestion (ADR-0001): two crons feed the discovery pipeline from real
- * YouTube data, replacing the manual seed.
+ * Live ingestion (ADR-0001, ADR-0003): crons feed the discovery pipeline from
+ * real YouTube data, replacing the manual seed.
  *
  *   discovery cron → fetch trending → upsert channels + videos → derive Listings
  *   snapshot cron  → re-sample tracked videos → write Snapshots → derive Listings
+ *   snowball cron  → fetch related channels off tracked ones → upsert channels + edges
+ *   embed cron     → embed channels → vector-search cluster size → write Saturation
  *
- * The YouTube boundary is a humble adapter (`model/youtube.ts`). The cron
- * `internalAction`s wire the real adapter from env; the `runDiscovery` /
- * `runSnapshot` orchestration and the mutations they call are the tested seam,
- * driven in tests with a stub adapter so no network is hit.
+ * The YouTube and embeddings boundaries are humble adapters (`model/youtube.ts`,
+ * `model/embeddings.ts`). The cron `internalAction`s wire the real adapters from
+ * env; the `run*` orchestration and the mutations they call are the tested seam,
+ * driven in tests with stub adapters so no network is hit. Vector search is
+ * action-only, so Saturation is measured in `runEmbed`, not the recompute mutation.
  */
 
 import { v } from "convex/values";
@@ -22,6 +25,12 @@ import {
 	internalQuery,
 } from "./_generated/server";
 import { classifyForm } from "./model/deriveListings";
+import {
+	buildChannelEmbeddingText,
+	createVoyageEmbeddingsAdapter,
+	EMBEDDING_DIMENSIONS,
+	type EmbeddingsAdapter,
+} from "./model/embeddings";
 import { recomputeListingsForChannel } from "./model/listings";
 import {
 	createYouTubeAdapter,
@@ -33,6 +42,37 @@ import {
  * the batched stats requests within a sane quota per cron tick. Tunable. */
 const SNAPSHOT_VIDEO_LIMIT = 500;
 
+/** How many already-tracked content channels a snowball run expands from per
+ * tick. Frugal: one `brandingSettings` batch per 50 seeds (ADR-0001). Tunable. */
+const SNOWBALL_SEED_LIMIT = 50;
+
+/** Bound on the tracked set a single embed/saturation tick scans. At this scale
+ * it covers the whole catalog; a later slice paginates past it. Tunable. */
+const CHANNEL_SCAN_LIMIT = 1000;
+
+/** How many missing embeddings one embed tick backfills — one Voyage batch. */
+const EMBED_BATCH = 128;
+
+/** Recent upload titles folded into a channel's embedding text (sharpest niche
+ * signal). Matches the embeddings adapter's own cap. */
+const EMBED_TITLE_COUNT = 8;
+
+/** Neighbors pulled per channel when sizing its niche cluster. Saturation caps
+ * out at "crowded", so a count past this reads as crowded either way. 1–256. */
+const SATURATION_NEIGHBOR_LIMIT = 64;
+
+/** Channels whose Saturation is written per mutation. Bounds the work of one
+ * transaction: each changed channel re-derives its Listings (a bounded video
+ * read), so the whole pass is spread across several small mutations. Tunable. */
+const SATURATION_WRITE_BATCH = 25;
+
+/**
+ * Minimum cosine similarity for two channels to count as the same niche. Vector
+ * scores run −1…1; same-niche content clusters high, so this sits well above 0.
+ * Tunable — the single knob that widens or tightens what "similar" means.
+ */
+const SIMILARITY_THRESHOLD = 0.75;
+
 /** Result of an ingestion run, surfaced from the cron/orchestration for logs. */
 export type DiscoveryResult = {
 	channels: number;
@@ -40,6 +80,13 @@ export type DiscoveryResult = {
 	channelsRecomputed: number;
 };
 export type SnapshotResult = { snapshots: number; channelsRecomputed: number };
+export type SnowballResult = {
+	seeds: number;
+	discovered: number;
+	edges: number;
+	channelsRecomputed: number;
+};
+export type EmbedResult = { embedded: number; saturated: number };
 
 // --- Argument validators (shared shape between mutation and orchestration) -----
 
@@ -60,6 +107,12 @@ const discoveredVideoValidator = v.object({
 	publishedAt: v.number(),
 	viewCount: v.number(),
 	isStandard: v.boolean(),
+});
+
+/** A snowball edge as a pair of YouTube channel ids (resolved to ids on write). */
+const snowballEdgeValidator = v.object({
+	fromYtId: v.string(),
+	toYtId: v.string(),
 });
 
 // --- Mutations & queries (the DB seam) -----------------------------------------
@@ -208,6 +261,270 @@ export const recordSnapshots = internalMutation({
 	},
 });
 
+/** The already-tracked content channels a snowball run expands from — real
+ * trending/seed channels, never snowball-only rows (which carry no content of
+ * their own to justify sprawling the graph further). Newest content first. */
+export const listSnowballSeeds = internalQuery({
+	args: { limit: v.optional(v.number()) },
+	handler: async (
+		ctx,
+		{ limit },
+	): Promise<{ channelId: Id<"channels">; ytId: string }[]> => {
+		const cap = limit ?? SNOWBALL_SEED_LIMIT;
+		const trending = await ctx.db
+			.query("channels")
+			.withIndex("by_source", (q) => q.eq("source", "trending"))
+			.order("desc")
+			.take(cap);
+		const seeded =
+			trending.length < cap
+				? await ctx.db
+						.query("channels")
+						.withIndex("by_source", (q) => q.eq("source", "seed"))
+						.order("desc")
+						.take(cap - trending.length)
+				: [];
+		return [...trending, ...seeded].map((c) => ({
+			channelId: c._id,
+			ytId: c.ytId,
+		}));
+	},
+});
+
+/**
+ * Upsert snowballed channels and record the graph edges. Newcomers enter tracked
+ * as snowball-sourced (no videos yet — they populate the niche graph, not the
+ * Feed); already-known channels just refresh metadata. Edges are deduped so a
+ * neighbor count stays honest, and both endpoints of a new edge are recomputed so
+ * their snowball-density Saturation fallback updates.
+ */
+export const upsertSnowball = internalMutation({
+	args: {
+		channels: v.array(discoveredChannelValidator),
+		edges: v.array(snowballEdgeValidator),
+	},
+	handler: async (
+		ctx,
+		{ channels, edges },
+	): Promise<Omit<SnowballResult, "seeds">> => {
+		const now = Date.now();
+		const idByYt = new Map<string, Id<"channels">>();
+
+		let discovered = 0;
+		for (const channel of channels) {
+			const existing = await ctx.db
+				.query("channels")
+				.withIndex("by_ytId", (q) => q.eq("ytId", channel.ytChannelId))
+				.unique();
+			const fields = {
+				title: channel.title,
+				handle: channel.handle,
+				avatarUrl: channel.avatarUrl,
+				description: channel.description,
+			};
+			if (existing !== null) {
+				await ctx.db.patch("channels", existing._id, fields);
+				idByYt.set(channel.ytChannelId, existing._id);
+			} else {
+				const id = await ctx.db.insert("channels", {
+					ytId: channel.ytChannelId,
+					discoveredAt: now,
+					source: "snowball",
+					...fields,
+				});
+				idByYt.set(channel.ytChannelId, id);
+				discovered++;
+			}
+		}
+
+		// Resolve a YouTube id to a tracked channel id, caching lookups — the `from`
+		// side is an existing seed we didn't necessarily just upsert.
+		const resolve = async (
+			ytId: string,
+		): Promise<Id<"channels"> | undefined> => {
+			const cached = idByYt.get(ytId);
+			if (cached !== undefined) {
+				return cached;
+			}
+			const channel = await ctx.db
+				.query("channels")
+				.withIndex("by_ytId", (q) => q.eq("ytId", ytId))
+				.unique();
+			if (channel === null) {
+				return undefined;
+			}
+			idByYt.set(ytId, channel._id);
+			return channel._id;
+		};
+
+		const touched = new Set<Id<"channels">>();
+		const seen = new Set<string>();
+		let edgeCount = 0;
+		for (const edge of edges) {
+			const fromId = await resolve(edge.fromYtId);
+			const toId = await resolve(edge.toYtId);
+			if (fromId === undefined || toId === undefined || fromId === toId) {
+				continue; // unknown endpoint or self-edge — skip defensively
+			}
+			const key = `${fromId}:${toId}`;
+			if (seen.has(key)) {
+				continue; // duplicate within this batch
+			}
+			seen.add(key);
+			const dup = await ctx.db
+				.query("channelEdges")
+				.withIndex("by_from", (q) => q.eq("fromChannelId", fromId))
+				.filter((q) => q.eq(q.field("toChannelId"), toId))
+				.first();
+			if (dup !== null) {
+				continue; // already recorded on a previous run
+			}
+			await ctx.db.insert("channelEdges", {
+				fromChannelId: fromId,
+				toChannelId: toId,
+			});
+			edgeCount++;
+			touched.add(fromId);
+			touched.add(toId);
+		}
+
+		for (const channelId of touched) {
+			await recomputeListingsForChannel(ctx, channelId);
+		}
+
+		return { discovered, edges: edgeCount, channelsRecomputed: touched.size };
+	},
+});
+
+/**
+ * Channels still missing an embedding, with the text to embed prebuilt from their
+ * metadata and recent upload titles. Filtered in JS rather than the query because
+ * an unset optional field isn't indexable; the scan is newest-first and bounded to
+ * the catalog, so freshly discovered channels are always embedded first (a later
+ * slice paginates past the cap).
+ */
+export const listChannelsToEmbed = internalQuery({
+	args: { limit: v.optional(v.number()) },
+	handler: async (
+		ctx,
+		{ limit },
+	): Promise<{ channelId: Id<"channels">; text: string }[]> => {
+		const channels = await ctx.db
+			.query("channels")
+			.order("desc")
+			.take(CHANNEL_SCAN_LIMIT);
+		const missing = channels
+			.filter((c) => c.embedding === undefined)
+			.slice(0, limit ?? EMBED_BATCH);
+
+		const out: { channelId: Id<"channels">; text: string }[] = [];
+		for (const channel of missing) {
+			const videos = await ctx.db
+				.query("videos")
+				.withIndex("by_channel_and_publishedAt", (q) =>
+					q.eq("channelId", channel._id),
+				)
+				.order("desc")
+				.take(EMBED_TITLE_COUNT);
+			out.push({
+				channelId: channel._id,
+				text: buildChannelEmbeddingText(
+					{ title: channel.title, description: channel.description },
+					videos.map((video) => video.title),
+				),
+			});
+		}
+		return out;
+	},
+});
+
+/** Persist backfilled embeddings. A wrong-width vector (malformed provider
+ * response) is skipped rather than stored, since the index would reject it. */
+export const saveEmbeddings = internalMutation({
+	args: {
+		items: v.array(
+			v.object({
+				channelId: v.id("channels"),
+				embedding: v.array(v.number()),
+			}),
+		),
+	},
+	handler: async (ctx, { items }): Promise<{ embedded: number }> => {
+		let embedded = 0;
+		for (const item of items) {
+			if (item.embedding.length !== EMBEDDING_DIMENSIONS) {
+				continue;
+			}
+			await ctx.db.patch("channels", item.channelId, {
+				embedding: item.embedding,
+			});
+			embedded++;
+		}
+		return { embedded };
+	},
+});
+
+/** Embedded channels and their vectors, the query side of the Saturation pass.
+ * Newest-first and bounded, mirroring the embed backfill's scan. */
+export const listEmbeddedChannels = internalQuery({
+	args: { limit: v.optional(v.number()) },
+	handler: async (
+		ctx,
+		{ limit },
+	): Promise<{ channelId: Id<"channels">; embedding: number[] }[]> => {
+		const channels = await ctx.db
+			.query("channels")
+			.order("desc")
+			.take(CHANNEL_SCAN_LIMIT);
+		const cap = limit ?? CHANNEL_SCAN_LIMIT;
+		const out: { channelId: Id<"channels">; embedding: number[] }[] = [];
+		for (const channel of channels) {
+			if (channel.embedding === undefined) {
+				continue;
+			}
+			out.push({ channelId: channel._id, embedding: channel.embedding });
+			if (out.length >= cap) {
+				break;
+			}
+		}
+		return out;
+	},
+});
+
+/**
+ * Write each channel's freshly measured Saturation and re-derive its Listings so
+ * Stage reflects the niche's crowdedness (a crowded niche dominates → Established).
+ * Skips a channel whose Saturation is unchanged — most channels hold steady tick
+ * to tick, and recomputing rewrites Listings, so this avoids needless reactive
+ * churn on the Feed. Called in small batches so one mutation never recomputes an
+ * unbounded set (each recompute reads a channel's recent videos).
+ */
+export const applySaturation = internalMutation({
+	args: {
+		items: v.array(
+			v.object({
+				channelId: v.id("channels"),
+				saturation: v.number(),
+			}),
+		),
+	},
+	handler: async (ctx, { items }): Promise<{ channelsRecomputed: number }> => {
+		let recomputed = 0;
+		for (const item of items) {
+			const channel = await ctx.db.get("channels", item.channelId);
+			if (channel === null || channel.saturation === item.saturation) {
+				continue; // gone, or already at this value — nothing to rewrite
+			}
+			await ctx.db.patch("channels", item.channelId, {
+				saturation: item.saturation,
+			});
+			await recomputeListingsForChannel(ctx, item.channelId);
+			recomputed++;
+		}
+		return { channelsRecomputed: recomputed };
+	},
+});
+
 // --- Orchestration (plain helpers, tested with a stub adapter) -----------------
 
 /**
@@ -282,6 +599,104 @@ export async function runSnapshot(
 	});
 }
 
+/**
+ * Snowball discovery (CONTEXT.md): expand from tracked content channels to the
+ * channels featured/related off them, tracking the newcomers and recording the
+ * graph edges. Its job is to populate same-niche clusters so vector search — and
+ * thus Saturation — has neighbors to find; it never fetches videos, so a
+ * snowballed channel joins the niche graph but only reaches the Feed if trending
+ * later proves it. Frugal: one `brandingSettings` batch per 50 seeds, one
+ * `channels` batch per 50 newcomers, never `search.list` (ADR-0001).
+ */
+export async function runSnowball(
+	ctx: ActionCtx,
+	adapter: YouTubeAdapter,
+	opts?: { limit?: number },
+): Promise<SnowballResult> {
+	const seeds = await ctx.runQuery(internal.ingest.listSnowballSeeds, {
+		limit: opts?.limit,
+	});
+	if (seeds.length === 0) {
+		return { seeds: 0, discovered: 0, edges: 0, channelsRecomputed: 0 };
+	}
+
+	const related = await adapter.fetchRelatedChannels(seeds.map((s) => s.ytId));
+	const relatedYtIds = [
+		...new Set(related.flatMap((r) => r.relatedChannelIds)),
+	];
+	const infos =
+		relatedYtIds.length > 0 ? await adapter.fetchChannels(relatedYtIds) : [];
+	const edges = related.flatMap((r) =>
+		r.relatedChannelIds.map((toYtId) => ({
+			fromYtId: r.fromChannelId,
+			toYtId,
+		})),
+	);
+
+	const result = await ctx.runMutation(internal.ingest.upsertSnowball, {
+		channels: infos.map((info) => ({
+			ytChannelId: info.ytChannelId,
+			title: info.title,
+			handle: info.handle,
+			avatarUrl: info.avatarUrl,
+			description: info.description,
+		})),
+		edges,
+	});
+	return { seeds: seeds.length, ...result };
+}
+
+/**
+ * The embed + Saturation pass (ADR-0003). First backfills channel embeddings for a
+ * bounded batch missing one; then, over every embedded channel, sizes its niche
+ * cluster with vector search (neighbors within `SIMILARITY_THRESHOLD`) and writes
+ * that Saturation back — which re-derives Stage, letting a crowded niche dominate.
+ * Vector search is action-only, so the whole pass lives here rather than in the
+ * recompute mutation.
+ */
+export async function runEmbed(
+	ctx: ActionCtx,
+	adapter: EmbeddingsAdapter,
+	opts?: { embedLimit?: number; saturateLimit?: number },
+): Promise<EmbedResult> {
+	const toEmbed = await ctx.runQuery(internal.ingest.listChannelsToEmbed, {
+		limit: opts?.embedLimit,
+	});
+	if (toEmbed.length > 0) {
+		const vectors = await adapter.embed(toEmbed.map((c) => c.text));
+		await ctx.runMutation(internal.ingest.saveEmbeddings, {
+			items: toEmbed.map((c, i) => ({
+				channelId: c.channelId,
+				embedding: vectors[i] ?? [],
+			})),
+		});
+	}
+
+	const embedded = await ctx.runQuery(internal.ingest.listEmbeddedChannels, {
+		limit: opts?.saturateLimit,
+	});
+	const items: { channelId: Id<"channels">; saturation: number }[] = [];
+	for (const channel of embedded) {
+		const neighbors = await ctx.vectorSearch("channels", "by_embedding", {
+			vector: channel.embedding,
+			limit: SATURATION_NEIGHBOR_LIMIT,
+		});
+		const saturation = neighbors.filter(
+			(n) => n._id !== channel.channelId && n._score >= SIMILARITY_THRESHOLD,
+		).length;
+		items.push({ channelId: channel.channelId, saturation });
+	}
+
+	// Spread the writes across small mutations so no single transaction recomputes
+	// an unbounded set of Listings.
+	for (let i = 0; i < items.length; i += SATURATION_WRITE_BATCH) {
+		await ctx.runMutation(internal.ingest.applySaturation, {
+			items: items.slice(i, i + SATURATION_WRITE_BATCH),
+		});
+	}
+	return { embedded: toEmbed.length, saturated: items.length };
+}
+
 // --- Cron entrypoints ----------------------------------------------------------
 
 /** Build the live adapter, failing loudly if the API key isn't configured. */
@@ -295,6 +710,17 @@ function liveAdapter(): YouTubeAdapter {
 	return createYouTubeAdapter(apiKey);
 }
 
+/** Build the live embeddings adapter, failing loudly if its key isn't set. */
+function liveEmbeddingsAdapter(): EmbeddingsAdapter {
+	const apiKey = process.env.VOYAGE_API_KEY;
+	if (!apiKey) {
+		throw new Error(
+			"VOYAGE_API_KEY is not set — configure it in the Convex dashboard.",
+		);
+	}
+	return createVoyageEmbeddingsAdapter(apiKey);
+}
+
 export const discoveryCron = internalAction({
 	args: {},
 	handler: async (ctx): Promise<DiscoveryResult> =>
@@ -305,4 +731,16 @@ export const snapshotCron = internalAction({
 	args: {},
 	handler: async (ctx): Promise<SnapshotResult> =>
 		runSnapshot(ctx, liveAdapter()),
+});
+
+export const snowballCron = internalAction({
+	args: {},
+	handler: async (ctx): Promise<SnowballResult> =>
+		runSnowball(ctx, liveAdapter()),
+});
+
+export const embedCron = internalAction({
+	args: {},
+	handler: async (ctx): Promise<EmbedResult> =>
+		runEmbed(ctx, liveEmbeddingsAdapter()),
 });
