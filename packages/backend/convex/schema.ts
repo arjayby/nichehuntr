@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { EMBEDDING_DIMENSIONS } from "./model/embeddings";
 import {
 	formValidator,
 	signalsValidator,
@@ -17,15 +18,25 @@ export default defineSchema({
 		handle: v.optional(v.string()),
 		avatarUrl: v.optional(v.string()),
 		description: v.optional(v.string()),
-		// Content embedding powering Saturation via vector search (ADR-0003). The
-		// provider/dimension are chosen at build time, so the vector index is added
-		// with the Saturation slice; here the field just reserves its place.
+		// Content embedding powering Saturation via the vector index below
+		// (ADR-0003). Null until the embed cron backfills it.
 		embedding: v.optional(v.array(v.float64())),
+		// The channel's Saturation: the nearest-neighbor cluster size the embed cron
+		// derives from vector search. Read back by `recomputeListingsForChannel`
+		// (which falls back to snowball-graph density when this is unset) and ridden
+		// onto each of the channel's Listings. Per-channel because the embedding is.
+		saturation: v.optional(v.number()),
 		discoveredAt: v.number(),
 		source: sourceValidator,
 	})
 		.index("by_ytId", ["ytId"])
-		.index("by_source", ["source"]),
+		.index("by_source", ["source"])
+		// Nearest-neighbor search over channel embeddings drives Saturation. Only
+		// callable from an action, so the embed cron owns it (ADR-0003).
+		.vectorIndex("by_embedding", {
+			vectorField: "embedding",
+			dimensions: EMBEDDING_DIMENSIONS,
+		}),
 
 	// Individual uploads. `form` is denormalized per video from its duration so
 	// the read path never has to reclassify. `isStandard` is false for
@@ -69,4 +80,16 @@ export default defineSchema({
 	})
 		.index("by_channel", ["channelId"])
 		.index("by_form_and_proven", ["form", "proven"]),
+
+	// The snowball graph (CONTEXT.md): a directed edge means `toChannelId` surfaced
+	// as related/featured off `fromChannelId` during snowball discovery. Its purpose
+	// is to populate same-niche clusters so vector search has neighbors to find; its
+	// density around a channel is also the cold-start Saturation fallback before
+	// embeddings exist. Edges are deduped on insert, so a neighbor count is honest.
+	channelEdges: defineTable({
+		fromChannelId: v.id("channels"),
+		toChannelId: v.id("channels"),
+	})
+		.index("by_from", ["fromChannelId"])
+		.index("by_to", ["toChannelId"]),
 });

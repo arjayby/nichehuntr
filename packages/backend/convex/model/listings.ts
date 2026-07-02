@@ -12,6 +12,39 @@ const RECOMPUTE_VIDEO_LIMIT = 100;
  * and to bound the per-video read (ADR-0001: velocity sharpens over ~24–72h). */
 const RECENT_SNAPSHOT_WINDOW = 12;
 
+/** Safety cap on snowball edges read per channel when counting niche density.
+ * Related-channel fan-out is small, so this only guards a pathological graph. */
+const EDGE_SCAN_LIMIT = 256;
+
+/**
+ * A channel's snowball-graph density: how many distinct other channels it shares
+ * a related/featured edge with, in either direction. This is the cold-start
+ * Saturation fallback (CONTEXT.md) — a rough niche-crowdedness read before the
+ * embed cron has produced a vector-search cluster size.
+ */
+async function snowballDensity(
+	ctx: MutationCtx,
+	channelId: Id<"channels">,
+): Promise<number> {
+	const outgoing = await ctx.db
+		.query("channelEdges")
+		.withIndex("by_from", (q) => q.eq("fromChannelId", channelId))
+		.take(EDGE_SCAN_LIMIT);
+	const incoming = await ctx.db
+		.query("channelEdges")
+		.withIndex("by_to", (q) => q.eq("toChannelId", channelId))
+		.take(EDGE_SCAN_LIMIT);
+	const neighbors = new Set<string>();
+	for (const edge of outgoing) {
+		neighbors.add(edge.toChannelId);
+	}
+	for (const edge of incoming) {
+		neighbors.add(edge.fromChannelId);
+	}
+	neighbors.delete(channelId); // ignore any self-edge
+	return neighbors.size;
+}
+
 /**
  * Recompute a channel's Listings from its videos and replace the stored rows so
  * the reactive read model matches the latest Proven verdict. This is the seam
@@ -54,10 +87,24 @@ export async function recomputeListingsForChannel(
 		});
 	}
 
+	// Saturation is per-channel: the embed cron's vector-search cluster size when
+	// present (authoritative), else the snowball-graph density fallback, else null
+	// (unknown — Stage stays on the momentum axis). deriveListings rides it onto
+	// each of the channel's Listings and lets a crowded niche dominate Stage.
+	const channel = await ctx.db.get("channels", channelId);
+	let saturation: number | null;
+	if (channel?.saturation !== undefined) {
+		saturation = channel.saturation;
+	} else {
+		const density = await snowballDensity(ctx, channelId);
+		saturation = density > 0 ? density : null;
+	}
+
 	const derived = deriveListings({
 		channelId,
 		now: Date.now(),
 		videos: provenVideos,
+		saturation,
 	});
 
 	const existing = await ctx.db

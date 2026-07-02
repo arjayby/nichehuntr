@@ -51,6 +51,7 @@ function stubAdapter(cfg: {
 			})),
 		fetchVideoStats: async (ids) =>
 			ids.map((id) => ({ ytVideoId: id, viewCount: cfg.statViews ?? 0 })),
+		fetchRelatedChannels: async () => [],
 	};
 }
 

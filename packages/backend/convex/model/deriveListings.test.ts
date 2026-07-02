@@ -6,7 +6,10 @@ import {
 	MOMENTUM_MODEST,
 	MOMENTUM_STRONG,
 	type ProvenVideo,
+	SATURATION_CROWDED,
+	SATURATION_WARM,
 	type Snapshot,
+	saturationLevel,
 	stageFor,
 } from "./deriveListings";
 
@@ -346,25 +349,104 @@ describe("deriveListings — Momentum & Stage", () => {
 	});
 });
 
-describe("stageFor", () => {
+describe("stageFor — momentum axis (saturation not measured)", () => {
 	it("maps strong momentum to Breaking Out (threshold inclusive)", () => {
-		expect(stageFor(MOMENTUM_STRONG)).toBe("breaking_out");
-		expect(stageFor(1)).toBe("breaking_out");
+		expect(stageFor(MOMENTUM_STRONG, null)).toBe("breaking_out");
+		expect(stageFor(1, null)).toBe("breaking_out");
 	});
 
 	it("maps modest-positive momentum to Emerging", () => {
-		expect(stageFor(MOMENTUM_MODEST)).toBe("emerging");
-		expect(stageFor((MOMENTUM_STRONG + MOMENTUM_MODEST) / 2)).toBe("emerging");
+		expect(stageFor(MOMENTUM_MODEST, null)).toBe("emerging");
+		expect(stageFor((MOMENTUM_STRONG + MOMENTUM_MODEST) / 2, null)).toBe(
+			"emerging",
+		);
 	});
 
 	it("maps flat or declining momentum to Established", () => {
-		expect(stageFor(0)).toBe("established");
-		expect(stageFor(MOMENTUM_MODEST - 0.001)).toBe("established");
+		expect(stageFor(0, null)).toBe("established");
+		expect(stageFor(MOMENTUM_MODEST - 0.001, null)).toBe("established");
 	});
 });
 
-describe("deriveListings — later-slice placeholders", () => {
-	it("leaves Saturation, Clonability, and the AI signals unset", () => {
+describe("stageFor — saturation dominates", () => {
+	it("forces Established for a crowded niche even under strong momentum", () => {
+		// The whole point of the override: a niche this full is too late to clone,
+		// so it lands in Established no matter how hard it is still accelerating.
+		expect(stageFor(1, SATURATION_CROWDED)).toBe("established");
+		expect(stageFor(MOMENTUM_STRONG, SATURATION_CROWDED + 5)).toBe(
+			"established",
+		);
+	});
+
+	it("does not override while the niche is only warming up", () => {
+		// Below the crowded band momentum still decides — a filling-in niche with
+		// real momentum is exactly the Breaking Out sweet spot.
+		expect(stageFor(MOMENTUM_STRONG, SATURATION_WARM)).toBe("breaking_out");
+		expect(stageFor(MOMENTUM_MODEST, SATURATION_CROWDED - 1)).toBe("emerging");
+	});
+
+	it("leaves an uncrowded strong listing in Breaking Out", () => {
+		expect(stageFor(MOMENTUM_STRONG, 0)).toBe("breaking_out");
+	});
+});
+
+describe("saturationLevel bucketing", () => {
+	it("reads a sparse niche as low", () => {
+		expect(saturationLevel(0)).toBe("low");
+		expect(saturationLevel(SATURATION_WARM - 1)).toBe("low");
+	});
+
+	it("reads a filling-in niche as medium", () => {
+		expect(saturationLevel(SATURATION_WARM)).toBe("medium");
+		expect(saturationLevel(SATURATION_CROWDED - 1)).toBe("medium");
+	});
+
+	it("reads a crowded niche as high (the band that dominates Stage)", () => {
+		expect(saturationLevel(SATURATION_CROWDED)).toBe("high");
+		expect(saturationLevel(SATURATION_CROWDED + 100)).toBe("high");
+	});
+});
+
+describe("deriveListings — Saturation threading", () => {
+	// A strongly-accelerating channel: on momentum alone it is Breaking Out.
+	const surging = () =>
+		longVideo(150_000, { snapshots: snaps(100_000, 150_000) });
+
+	it("rides the channel's saturation onto every form's Listing", () => {
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			saturation: SATURATION_WARM,
+			videos: [surging(), surging(), surging()],
+		});
+
+		expect(listings[0]?.saturation).toBe(SATURATION_WARM);
+	});
+
+	it("lets a crowded niche sink a strong listing to Established", () => {
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			saturation: SATURATION_CROWDED,
+			videos: [surging(), surging(), surging()],
+		});
+
+		expect(listings[0]?.momentum).toBeGreaterThanOrEqual(MOMENTUM_STRONG);
+		expect(listings[0]?.stage).toBe("established");
+	});
+
+	it("leaves the same strong listing in Breaking Out while the niche is sparse", () => {
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			saturation: 0,
+			videos: [surging(), surging(), surging()],
+		});
+
+		expect(listings[0]?.stage).toBe("breaking_out");
+	});
+
+	it("defaults Saturation to null when it has not been measured yet", () => {
 		const listings = deriveListings({
 			channelId: "c",
 			now: NOW,

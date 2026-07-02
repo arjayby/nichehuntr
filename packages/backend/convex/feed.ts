@@ -24,6 +24,8 @@ export type FeedCard = {
 	medianViews: number;
 	/** Scale-free recent daily-growth rate driving Stage; the card's indicator. */
 	momentum: number | null;
+	/** Similar-channel count — the niche's crowdedness; null until measured. */
+	saturation: number | null;
 	clonability: number | null;
 	channel: {
 		ytId: string;
@@ -87,6 +89,7 @@ export const feed = query({
 				stage: listing.stage,
 				medianViews: listing.medianViews,
 				momentum: listing.momentum,
+				saturation: listing.saturation,
 				clonability: listing.clonability,
 				channel: {
 					ytId: channel.ytId,

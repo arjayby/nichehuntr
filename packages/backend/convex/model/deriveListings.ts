@@ -3,13 +3,15 @@
  *
  * A Listing is a (Channel, Form) pair (ADR-0002): a channel's videos are
  * partitioned by duration and gated per form, so a channel that qualifies in
- * both forms yields two Listings. Slices 1–3 live here: form classification and
- * the objective Proven gate (Slice 1), plus per-form Baseline, Momentum, and the
- * momentum-driven Stage (Slice 3). Momentum is computed from the slope across a
+ * both forms yields two Listings. Slices 1–4 live here: form classification and
+ * the objective Proven gate (Slice 1), per-form Baseline, Momentum, and the
+ * momentum-driven Stage (Slice 3), and the Saturation override (Slice 4) —
+ * Saturation is passed in per-channel (measured by the embed cron) and dominates
+ * Stage once a niche is crowded. Momentum is computed from the slope across a
  * video's Snapshots, seeded with a `views ÷ video-age` proxy while snapshots are
- * still sparse (ADR-0001) so cold-start columns are never blank. Saturation and
- * Clonability remain placeholders for later slices. Keeping this function pure
- * (plain data in, Listing(s) out) makes it the project's primary test seam.
+ * still sparse (ADR-0001) so cold-start columns are never blank. Clonability
+ * remains a placeholder for a later slice. Keeping this function pure (plain data
+ * in, Listing(s) out) makes it the project's primary test seam.
  */
 
 /** A content form. A video/listing is either short-form or long-form. */
@@ -52,6 +54,33 @@ export const PROVEN_THRESHOLD: Record<Form, number> = {
  */
 export const MOMENTUM_STRONG = 0.1; // +10%/day of baseline reach
 export const MOMENTUM_MODEST = 0.02; // +2%/day of baseline reach
+
+/**
+ * Saturation bands over the similar-channel count (CONTEXT.md: Saturation). A
+ * niche in the CROWDED band is treated as too full to clone — the band that
+ * dominates Stage. WARM is the "starting to fill in" band, surfaced on the card
+ * but not yet decisive. Both tunable.
+ */
+export const SATURATION_WARM = 3; // ≥ this many similar channels ⇒ warming up
+export const SATURATION_CROWDED = 8; // ≥ this ⇒ crowded ⇒ Established (dominant)
+
+/** A Saturation band for the card and the Stage override. */
+export type SaturationLevel = "low" | "medium" | "high";
+
+/**
+ * Bucket a similar-channel count into a Saturation band. `high` is the crowded
+ * band that dominates Stage regardless of Momentum (CONTEXT.md: a crowded niche
+ * is Established even under strong momentum).
+ */
+export function saturationLevel(count: number): SaturationLevel {
+	if (count >= SATURATION_CROWDED) {
+		return "high";
+	}
+	if (count >= SATURATION_WARM) {
+		return "medium";
+	}
+	return "low";
+}
 
 /**
  * Two snapshots closer together than this are treated as a single reading: the
@@ -100,6 +129,14 @@ export type DeriveListingsInput<Cid> = {
 	videos: ProvenVideo[];
 	/** Reference "now", ms since epoch — injected so the gate is deterministic. */
 	now: number;
+	/**
+	 * The channel's Saturation: the count of similar tracked channels in its
+	 * (implicit) niche — nearest-neighbor cluster size via vector search, or the
+	 * snowball-graph density fallback (CONTEXT.md). Per-channel because the content
+	 * embedding is per-channel, so it rides every form's Listing alike; `null` until
+	 * measured, leaving Stage on the momentum axis.
+	 */
+	saturation?: number | null;
 };
 
 /** The reactive read-model row produced per (channel, form). */
@@ -173,12 +210,16 @@ function computeMomentum(
 }
 
 /**
- * Assign Stage from Momentum. Saturation is the dominant axis once measured
- * (CONTEXT.md: a crowded niche is Established regardless of momentum), but it is
- * not computed until a later slice, so here it is treated as low: strong momentum
- * ⇒ Breaking Out, modest-positive ⇒ Emerging, flat/declining ⇒ Established.
+ * Assign Stage from Momentum and Saturation, with **Saturation dominating**
+ * (CONTEXT.md): a crowded niche is Established regardless of momentum — too late
+ * to clone from either direction. Below the crowded band (or when saturation is
+ * `null`, i.e. not measured yet) momentum decides: strong ⇒ Breaking Out,
+ * modest-positive ⇒ Emerging, flat/declining ⇒ Established.
  */
-export function stageFor(momentum: number): Stage {
+export function stageFor(momentum: number, saturation: number | null): Stage {
+	if (saturation !== null && saturationLevel(saturation) === "high") {
+		return "established";
+	}
 	if (momentum >= MOMENTUM_STRONG) {
 		return "breaking_out";
 	}
@@ -219,6 +260,9 @@ export function deriveListings<Cid>(
 		// the scale that Momentum is measured against.
 		const baseline = medianViews;
 		const momentum = computeMomentum(window, baseline, input.now);
+		// Saturation is per-channel (the embedding is per-channel), so both forms
+		// share it; it dominates Stage once the niche is crowded.
+		const saturation = input.saturation ?? null;
 
 		listings.push({
 			channelId: input.channelId,
@@ -227,10 +271,8 @@ export function deriveListings<Cid>(
 			medianViews,
 			baseline,
 			momentum,
-			// Saturation lands in a later slice; treated as low until then, so Stage
-			// is a pure function of Momentum here.
-			saturation: null,
-			stage: stageFor(momentum),
+			saturation,
+			stage: stageFor(momentum, saturation),
 			clonability: null,
 			signals: null,
 		});

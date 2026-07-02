@@ -2,6 +2,7 @@ import type { FeedCard } from "@nichehuntr/backend/convex/feed";
 import {
 	MOMENTUM_MODEST,
 	MOMENTUM_STRONG,
+	saturationLevel,
 } from "@nichehuntr/backend/convex/model/deriveListings";
 import {
 	Card,
@@ -9,7 +10,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
-import { ExternalLink, Minus, TrendingUp } from "lucide-react";
+import { ExternalLink, Minus, TrendingUp, Users } from "lucide-react";
 
 const compactViews = new Intl.NumberFormat("en", {
 	notation: "compact",
@@ -63,6 +64,51 @@ function MomentumIndicator({ momentum }: { momentum: number | null }) {
 			)}
 			{label}
 		</span>
+	);
+}
+
+/**
+ * The niche's crowdedness: how many similar channels already exist (CONTEXT.md:
+ * Saturation). A crowded niche is the signal it's too late to clone — so the
+ * high band reads as a caution — while a sparse one is neutral. Null until the
+ * embed cron measures it.
+ */
+function SaturationRead({ saturation }: { saturation: number | null }) {
+	if (saturation === null) {
+		return (
+			<div className="text-center">
+				<div className="text-muted-foreground text-xs">Niche</div>
+				<div
+					className="text-muted-foreground text-sm"
+					title="Saturation pending"
+				>
+					—
+				</div>
+			</div>
+		);
+	}
+	const level = saturationLevel(saturation);
+	const tone =
+		level === "high"
+			? "text-destructive"
+			: level === "medium"
+				? "text-foreground"
+				: "text-muted-foreground";
+	const title =
+		level === "high"
+			? `${saturation} similar channels — crowded niche, likely too late to clone`
+			: `${saturation} similar channels in this niche`;
+	return (
+		<div className="text-center">
+			<div className="text-muted-foreground text-xs">Niche</div>
+			<div
+				className={`inline-flex items-center gap-1 font-medium text-sm tabular-nums ${tone}`}
+				title={title}
+			>
+				<Users className="size-3.5" />
+				{saturation}
+			</div>
+		</div>
 	);
 }
 
@@ -129,6 +175,7 @@ export function ListingCard({ card }: { card: FeedCard }) {
 								{compactViews.format(card.medianViews)}
 							</div>
 						</div>
+						<SaturationRead saturation={card.saturation} />
 						<div className="text-right">
 							<div className="text-muted-foreground text-xs">Clonability</div>
 							<div className="font-medium tabular-nums">
