@@ -10,12 +10,16 @@
 
 import type * as auth from "../auth.js";
 import type * as crons from "../crons.js";
+import type * as enrich from "../enrich.js";
+import type * as enrichCron from "../enrichCron.js";
 import type * as feed from "../feed.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
+import type * as model_clonability from "../model/clonability.js";
 import type * as model_deriveListings from "../model/deriveListings.js";
 import type * as model_embeddings from "../model/embeddings.js";
+import type * as model_enrichment from "../model/enrichment.js";
 import type * as model_listings from "../model/listings.js";
 import type * as model_validators from "../model/validators.js";
 import type * as model_youtube from "../model/youtube.js";
@@ -32,12 +36,16 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   crons: typeof crons;
+  enrich: typeof enrich;
+  enrichCron: typeof enrichCron;
   feed: typeof feed;
   healthCheck: typeof healthCheck;
   http: typeof http;
   ingest: typeof ingest;
+  "model/clonability": typeof model_clonability;
   "model/deriveListings": typeof model_deriveListings;
   "model/embeddings": typeof model_embeddings;
+  "model/enrichment": typeof model_enrichment;
   "model/listings": typeof model_listings;
   "model/validators": typeof model_validators;
   "model/youtube": typeof model_youtube;
