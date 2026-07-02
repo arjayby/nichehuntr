@@ -1,16 +1,70 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
 import {
+	MOMENTUM_MODEST,
+	MOMENTUM_STRONG,
+} from "@nichehuntr/backend/convex/model/deriveListings";
+import {
 	Card,
 	CardContent,
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Minus, TrendingUp } from "lucide-react";
 
 const compactViews = new Intl.NumberFormat("en", {
 	notation: "compact",
 	maximumFractionDigits: 1,
 });
+
+const momentumPct = new Intl.NumberFormat("en", {
+	style: "percent",
+	maximumFractionDigits: 0,
+});
+
+/**
+ * A compact Momentum badge: the listing's recent daily growth relative to its
+ * baseline reach — the same signal that places it in a column. Strong momentum
+ * (Breaking Out territory) reads as a filled brand pill; a still-accelerating
+ * listing as plain foreground; a flat/cooled one as a muted dash.
+ */
+function MomentumIndicator({ momentum }: { momentum: number | null }) {
+	if (momentum === null) {
+		return (
+			<span className="text-muted-foreground text-xs" title="Momentum pending">
+				—
+			</span>
+		);
+	}
+	const label = `${momentumPct.format(momentum)}/d`;
+	const title = "Recent daily growth vs. baseline reach";
+	if (momentum >= MOMENTUM_STRONG) {
+		return (
+			<span
+				className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 font-medium text-primary-foreground text-xs tabular-nums"
+				title={title}
+			>
+				<TrendingUp className="size-3" />
+				{label}
+			</span>
+		);
+	}
+	const accelerating = momentum >= MOMENTUM_MODEST;
+	return (
+		<span
+			className={`inline-flex items-center gap-1 font-medium text-xs tabular-nums ${
+				accelerating ? "text-foreground" : "text-muted-foreground"
+			}`}
+			title={title}
+		>
+			{accelerating ? (
+				<TrendingUp className="size-3.5" />
+			) : (
+				<Minus className="size-3.5" />
+			)}
+			{label}
+		</span>
+	);
+}
 
 /** Up to two initials for the avatar fallback, e.g. "AI Horror Shorts" → "AH". */
 function initials(title: string): string {
@@ -59,9 +113,12 @@ export function ListingCard({ card }: { card: FeedCard }) {
 								</p>
 							) : null}
 						</div>
-						<span className="ml-auto rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
-							{card.form}
-						</span>
+						<div className="ml-auto flex flex-col items-end gap-1">
+							<span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
+								{card.form}
+							</span>
+							<MomentumIndicator momentum={card.momentum} />
+						</div>
 					</div>
 				</CardHeader>
 				<CardContent>

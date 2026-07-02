@@ -22,6 +22,8 @@ export type FeedCard = {
 	form: Form;
 	stage: Stage;
 	medianViews: number;
+	/** Scale-free recent daily-growth rate driving Stage; the card's indicator. */
+	momentum: number | null;
 	clonability: number | null;
 	channel: {
 		ytId: string;
@@ -84,6 +86,7 @@ export const feed = query({
 				form: listing.form,
 				stage: listing.stage,
 				medianViews: listing.medianViews,
+				momentum: listing.momentum,
 				clonability: listing.clonability,
 				channel: {
 					ytId: channel.ytId,

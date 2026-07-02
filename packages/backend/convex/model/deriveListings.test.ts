@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyForm,
 	deriveListings,
+	MOMENTUM_MODEST,
+	MOMENTUM_STRONG,
 	type ProvenVideo,
+	type Snapshot,
+	stageFor,
 } from "./deriveListings";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -28,6 +32,17 @@ const longVideo = (viewCount: number, overrides: Partial<ProvenVideo> = {}) =>
 	video(600, viewCount, overrides);
 const shortVideo = (viewCount: number, overrides: Partial<ProvenVideo> = {}) =>
 	video(45, viewCount, overrides);
+
+/**
+ * Two snapshots `days` apart ending at NOW, so the derivation sees a real recent
+ * velocity slope of (to − from) / days views per day.
+ */
+function snaps(from: number, to: number, days = 2): Snapshot[] {
+	return [
+		{ viewCount: from, at: NOW - days * DAY },
+		{ viewCount: to, at: NOW },
+	];
+}
 
 describe("classifyForm", () => {
 	it("classifies a video at exactly 3 minutes as short-form", () => {
@@ -207,8 +222,149 @@ describe("deriveListings — window selection", () => {
 	});
 });
 
-describe("deriveListings — Slice 1 placeholders", () => {
-	it("leaves stage at Emerging and the AI-derived signals unset", () => {
+describe("deriveListings — Momentum & Stage", () => {
+	// Baseline is the median per-video reach, so momentum = medianVelocity /
+	// baseline is a scale-free daily-growth rate. Three same-size videos keep the
+	// arithmetic obvious: momentum is each video's velocity over its view count.
+
+	it("reads a steep recent slope as strong momentum ⇒ Breaking Out", () => {
+		// +50k over 2 days on a 150k baseline ⇒ 25k/day ⇒ momentum ≈ 0.167 ≥ strong.
+		const rising = () =>
+			longVideo(150_000, { snapshots: snaps(100_000, 150_000) });
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [rising(), rising(), rising()],
+		});
+
+		expect(listings[0]?.momentum).toBeGreaterThanOrEqual(MOMENTUM_STRONG);
+		expect(listings[0]?.stage).toBe("breaking_out");
+	});
+
+	it("reads a shallow recent slope as modest momentum ⇒ Emerging", () => {
+		// +12k over 2 days on 150k ⇒ 6k/day ⇒ momentum 0.04: past modest, below strong.
+		const climbing = () =>
+			longVideo(150_000, { snapshots: snaps(138_000, 150_000) });
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [climbing(), climbing(), climbing()],
+		});
+
+		const momentum = listings[0]?.momentum ?? 0;
+		expect(momentum).toBeGreaterThanOrEqual(MOMENTUM_MODEST);
+		expect(momentum).toBeLessThan(MOMENTUM_STRONG);
+		expect(listings[0]?.stage).toBe("emerging");
+	});
+
+	it("reads a flat recent slope as no momentum ⇒ Established", () => {
+		const plateaued = () =>
+			longVideo(150_000, { snapshots: snaps(150_000, 150_000) });
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [plateaued(), plateaued(), plateaued()],
+		});
+
+		expect(listings[0]?.momentum).toBe(0);
+		expect(listings[0]?.stage).toBe("established");
+	});
+
+	it("reads a cooled/declining velocity as low momentum ⇒ Established", () => {
+		// A big listing barely moving: +3k over 2 days on a 500k baseline ⇒ momentum
+		// 0.003. Its recent velocity has fallen far below what its size once implied.
+		const cooling = () =>
+			longVideo(500_000, { snapshots: snaps(497_000, 500_000) });
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [cooling(), cooling(), cooling()],
+		});
+
+		const momentum = listings[0]?.momentum ?? 0;
+		expect(momentum).toBeGreaterThan(0);
+		expect(momentum).toBeLessThan(MOMENTUM_MODEST);
+		expect(listings[0]?.stage).toBe("established");
+	});
+
+	it("seeds momentum from views ÷ video-age when snapshots are sparse", () => {
+		// No snapshots: velocity is the lifetime proxy views/age. With identical
+		// views and age across the window momentum collapses to 1/ageDays = 1/30 — a
+		// modest positive that surfaces a fresh channel in Emerging, never blank.
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [longVideo(150_000), longVideo(150_000), longVideo(150_000)],
+		});
+
+		expect(listings[0]?.momentum).toBeCloseTo(1 / 30, 6);
+		expect(listings[0]?.stage).toBe("emerging");
+	});
+
+	it("treats a single snapshot as sparse, still using the proxy", () => {
+		const oneSnap = () =>
+			longVideo(150_000, { snapshots: [{ viewCount: 150_000, at: NOW }] });
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [oneSnap(), oneSnap(), oneSnap()],
+		});
+
+		expect(listings[0]?.momentum).toBeCloseTo(1 / 30, 6);
+	});
+
+	it("ignores a slope from snapshots too close together (sampling noise)", () => {
+		// Two readings 30 min apart would imply an absurd velocity; below the min
+		// span they count as one reading and momentum falls back to the proxy.
+		const HALF_HOUR = 30 * 60 * 1000;
+		const noisy = () =>
+			longVideo(150_000, {
+				snapshots: [
+					{ viewCount: 100_000, at: NOW - HALF_HOUR },
+					{ viewCount: 150_000, at: NOW },
+				],
+			});
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [noisy(), noisy(), noisy()],
+		});
+
+		// The proxy, not the 50k-in-30-min slope that would scream Breaking Out.
+		expect(listings[0]?.momentum).toBeCloseTo(1 / 30, 6);
+		expect(listings[0]?.stage).toBe("emerging");
+	});
+
+	it("reports Baseline as the window's median per-video reach", () => {
+		const listings = deriveListings({
+			channelId: "c",
+			now: NOW,
+			videos: [longVideo(120_000), longVideo(140_000), longVideo(160_000)],
+		});
+
+		expect(listings[0]?.baseline).toBe(140_000);
+	});
+});
+
+describe("stageFor", () => {
+	it("maps strong momentum to Breaking Out (threshold inclusive)", () => {
+		expect(stageFor(MOMENTUM_STRONG)).toBe("breaking_out");
+		expect(stageFor(1)).toBe("breaking_out");
+	});
+
+	it("maps modest-positive momentum to Emerging", () => {
+		expect(stageFor(MOMENTUM_MODEST)).toBe("emerging");
+		expect(stageFor((MOMENTUM_STRONG + MOMENTUM_MODEST) / 2)).toBe("emerging");
+	});
+
+	it("maps flat or declining momentum to Established", () => {
+		expect(stageFor(0)).toBe("established");
+		expect(stageFor(MOMENTUM_MODEST - 0.001)).toBe("established");
+	});
+});
+
+describe("deriveListings — later-slice placeholders", () => {
+	it("leaves Saturation, Clonability, and the AI signals unset", () => {
 		const listings = deriveListings({
 			channelId: "c",
 			now: NOW,
@@ -216,9 +372,6 @@ describe("deriveListings — Slice 1 placeholders", () => {
 		});
 
 		expect(listings[0]).toMatchObject({
-			stage: "emerging",
-			baseline: null,
-			momentum: null,
 			saturation: null,
 			clonability: null,
 			signals: null,
