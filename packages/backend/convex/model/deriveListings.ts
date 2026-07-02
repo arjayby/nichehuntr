@@ -3,11 +3,13 @@
  *
  * A Listing is a (Channel, Form) pair (ADR-0002): a channel's videos are
  * partitioned by duration and gated per form, so a channel that qualifies in
- * both forms yields two Listings. This module holds the Slice-1 rules only —
- * form classification and the objective Proven gate. Stage, Momentum,
- * Saturation, and Clonability are placeholders here and are filled in by later
- * slices; keeping this function pure (plain data in, Listing(s) out) makes it
- * the project's primary test seam.
+ * both forms yields two Listings. Slices 1–3 live here: form classification and
+ * the objective Proven gate (Slice 1), plus per-form Baseline, Momentum, and the
+ * momentum-driven Stage (Slice 3). Momentum is computed from the slope across a
+ * video's Snapshots, seeded with a `views ÷ video-age` proxy while snapshots are
+ * still sparse (ADR-0001) so cold-start columns are never blank. Saturation and
+ * Clonability remain placeholders for later slices. Keeping this function pure
+ * (plain data in, Listing(s) out) makes it the project's primary test seam.
  */
 
 /** A content form. A video/listing is either short-form or long-form. */
@@ -42,12 +44,22 @@ export const PROVEN_THRESHOLD: Record<Form, number> = {
 };
 
 /**
- * Stage assigned in Slice 1. Momentum/Saturation are not computed yet, so every
- * Proven listing lands in a single placeholder column until the Stage engine
- * exists. A freshly surfaced, freshly proven listing with unknown momentum is
- * provisionally treated as Emerging.
+ * Momentum thresholds on the scale-free daily-growth rate `computeMomentum`
+ * returns (the fraction of a video's Baseline reach the form adds per day). At or
+ * above STRONG a listing is Breaking Out — clone now; at or above MODEST it is
+ * still meaningfully accelerating and sits in Emerging; below MODEST its momentum
+ * has flattened or cooled and it is Established. All tunable (CONTEXT.md).
  */
-export const PLACEHOLDER_STAGE: Stage = "emerging";
+export const MOMENTUM_STRONG = 0.1; // +10%/day of baseline reach
+export const MOMENTUM_MODEST = 0.02; // +2%/day of baseline reach
+
+/**
+ * Two snapshots closer together than this are treated as a single reading: the
+ * snapshot cron samples only every few hours (crons.ts), so a sub-hour gap is
+ * sampling noise whose slope would be dominated by rounding. Below it, velocity
+ * falls back to the `views ÷ video-age` proxy. Tunable.
+ */
+export const MIN_SNAPSHOT_SPAN_MS = 60 * 60 * 1000; // 1 hour
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FORMS: readonly Form[] = ["short", "long"];
@@ -57,10 +69,21 @@ export function classifyForm(durationSec: number): Form {
 	return durationSec <= SHORT_FORM_MAX_SEC ? "short" : "long";
 }
 
+/** A point-in-time view-count reading, the raw material for Momentum (ADR-0001). */
+export type Snapshot = {
+	viewCount: number;
+	/** Reading time, ms since epoch. */
+	at: number;
+};
+
 /**
  * The subset of a video's data the derivation needs. `viewCount` is the video's
- * current view count (resolved from its latest snapshot by the caller);
- * `isStandard` is false for non-standard items such as live streams/premieres.
+ * current view count (resolved from its latest snapshot by the caller) and gates
+ * via the median; `snapshots` are its recent readings, from which Momentum reads
+ * a view-velocity slope. When fewer than two snapshots span a meaningful
+ * interval, velocity falls back to the `views ÷ video-age` proxy, so `snapshots`
+ * is optional. `isStandard` is false for non-standard items such as live
+ * streams/premieres.
  */
 export type ProvenVideo = {
 	durationSec: number;
@@ -68,6 +91,8 @@ export type ProvenVideo = {
 	/** Upload time, ms since epoch. */
 	publishedAt: number;
 	isStandard: boolean;
+	/** Recent view-count readings; order-independent (sorted by time internally). */
+	snapshots?: Snapshot[];
 };
 
 export type DeriveListingsInput<Cid> = {
@@ -83,8 +108,8 @@ export type DerivedListing<Cid> = {
 	form: Form;
 	proven: boolean;
 	medianViews: number;
-	baseline: number | null;
-	momentum: number | null;
+	baseline: number;
+	momentum: number;
 	saturation: number | null;
 	stage: Stage;
 	clonability: number | null;
@@ -102,9 +127,72 @@ function median(values: number[]): number {
 }
 
 /**
+ * A video's current view velocity in views/day. Prefers the slope across its
+ * recent snapshots when at least two span `MIN_SNAPSHOT_SPAN_MS`; otherwise
+ * falls back to the `views ÷ video-age` lifetime-average proxy (ADR-0001) so a
+ * freshly discovered video still gets a velocity before snapshots accumulate.
+ * Clamped at zero — a view count that dips (e.g. a spam purge) reads as flat,
+ * never negative.
+ */
+function viewVelocity(video: ProvenVideo, now: number): number {
+	const snapshots = video.snapshots ?? [];
+	if (snapshots.length >= 2) {
+		const sorted = [...snapshots].sort((a, b) => a.at - b.at);
+		const first = sorted[0] as Snapshot;
+		const last = sorted[sorted.length - 1] as Snapshot;
+		const spanMs = last.at - first.at;
+		if (spanMs >= MIN_SNAPSHOT_SPAN_MS) {
+			return Math.max(
+				0,
+				((last.viewCount - first.viewCount) / spanMs) * DAY_MS,
+			);
+		}
+	}
+	const ageDays = Math.max((now - video.publishedAt) / DAY_MS, 1);
+	return Math.max(0, video.viewCount / ageDays);
+}
+
+/**
+ * A listing's Momentum: the channel's recent per-video view velocity normalized
+ * by its Baseline reach — the fraction of a typical video's lifetime views the
+ * form is adding per day right now. Dividing by baseline makes it scale-free, so
+ * one set of thresholds fits a 100k channel and a 5M channel alike (CONTEXT.md:
+ * Momentum is relative to a channel's own baseline). Uses the median velocity
+ * across the window so one runaway video can't dominate, mirroring the gate.
+ */
+function computeMomentum(
+	window: ProvenVideo[],
+	baseline: number,
+	now: number,
+): number {
+	if (baseline <= 0) {
+		return 0;
+	}
+	const velocities = window.map((video) => viewVelocity(video, now));
+	return median(velocities) / baseline;
+}
+
+/**
+ * Assign Stage from Momentum. Saturation is the dominant axis once measured
+ * (CONTEXT.md: a crowded niche is Established regardless of momentum), but it is
+ * not computed until a later slice, so here it is treated as low: strong momentum
+ * ⇒ Breaking Out, modest-positive ⇒ Emerging, flat/declining ⇒ Established.
+ */
+export function stageFor(momentum: number): Stage {
+	if (momentum >= MOMENTUM_STRONG) {
+		return "breaking_out";
+	}
+	if (momentum >= MOMENTUM_MODEST) {
+		return "emerging";
+	}
+	return "established";
+}
+
+/**
  * Derive a channel's Listings — one per form that has enough settled, standard
- * uploads to evaluate. Each carries a `proven` verdict; the Feed shows only the
- * proven ones. Slice 1: form classification + Proven gate only.
+ * uploads to evaluate. Each carries a `proven` verdict (the Feed shows only the
+ * proven ones), a Baseline, a Momentum computed from snapshots, and the Stage
+ * that momentum places it in.
  */
 export function deriveListings<Cid>(
 	input: DeriveListingsInput<Cid>,
@@ -126,16 +214,23 @@ export function deriveListings<Cid>(
 
 		const window = forForm.slice(0, PROVEN_WINDOW);
 		const medianViews = median(window.map((vid) => vid.viewCount));
+		// Baseline is the channel's own per-video reach norm (CONTEXT.md). Over this
+		// window it coincides with the gate's median, but it plays a distinct role:
+		// the scale that Momentum is measured against.
+		const baseline = medianViews;
+		const momentum = computeMomentum(window, baseline, input.now);
 
 		listings.push({
 			channelId: input.channelId,
 			form,
 			proven: medianViews >= PROVEN_THRESHOLD[form],
 			medianViews,
-			baseline: null,
-			momentum: null,
+			baseline,
+			momentum,
+			// Saturation lands in a later slice; treated as low until then, so Stage
+			// is a pure function of Momentum here.
 			saturation: null,
-			stage: PLACEHOLDER_STAGE,
+			stage: stageFor(momentum),
 			clonability: null,
 			signals: null,
 		});

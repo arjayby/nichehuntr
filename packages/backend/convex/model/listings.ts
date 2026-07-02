@@ -6,6 +6,12 @@ import { deriveListings, type ProvenVideo } from "./deriveListings";
  * both forms' windows plus fresh/non-standard items the gate then drops. */
 const RECOMPUTE_VIDEO_LIMIT = 100;
 
+/** How many recent snapshots to load per video for Momentum. The newest is the
+ * current view count for the gate; the span across them is the velocity slope.
+ * Capped so momentum tracks *recent* cycles rather than a video's whole history,
+ * and to bound the per-video read (ADR-0001: velocity sharpens over ~24–72h). */
+const RECENT_SNAPSHOT_WINDOW = 12;
+
 /**
  * Recompute a channel's Listings from its videos and replace the stored rows so
  * the reactive read model matches the latest Proven verdict. This is the seam
@@ -25,12 +31,15 @@ export async function recomputeListingsForChannel(
 
 	const provenVideos: ProvenVideo[] = [];
 	for (const video of videos) {
-		const latest = await ctx.db
+		// Newest-first: [0] is the current view count for the gate, and the span
+		// across the window is the velocity slope Momentum reads.
+		const recentSnapshots = await ctx.db
 			.query("videoSnapshots")
 			.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
 			.order("desc")
-			.first();
-		if (latest === null) {
+			.take(RECENT_SNAPSHOT_WINDOW);
+		const latest = recentSnapshots[0];
+		if (latest === undefined) {
 			continue; // no view data yet — can't gate this video
 		}
 		provenVideos.push({
@@ -38,6 +47,10 @@ export async function recomputeListingsForChannel(
 			viewCount: latest.viewCount,
 			publishedAt: video.publishedAt,
 			isStandard: video.isStandard,
+			snapshots: recentSnapshots.map((s) => ({
+				viewCount: s.viewCount,
+				at: s.at,
+			})),
 		});
 	}
 

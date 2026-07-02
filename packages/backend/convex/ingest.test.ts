@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "./_generated/api";
 import { runDiscovery, runSnapshot } from "./ingest";
+import type { Stage } from "./model/deriveListings";
 import type {
 	ChannelInfo,
 	TrendingVideo,
@@ -233,5 +234,54 @@ describe("runSnapshot", () => {
 			runSnapshot(ctx, stubAdapter({ statViews: 1 })),
 		);
 		expect(result).toEqual({ snapshots: 0, channelsRecomputed: 0 });
+	});
+});
+
+describe("momentum drives live column placement", () => {
+	// Fake only Date so convex-test's async internals keep using real timers.
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("slides a Listing across columns as snapshot cycles reveal acceleration", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const t0 = Date.UTC(2026, 5, 1);
+		vi.setSystemTime(t0);
+
+		const t = convexTest(schema, modules);
+		const asUser = t.withIdentity({ subject: "u" });
+
+		/** Which lifecycle column the channel's card currently sits in. */
+		const columnOf = async (): Promise<Stage | undefined> => {
+			const groups = await asUser.query(api.feed.feed, { form: "long" });
+			return groups.find((g) =>
+				g.cards.some((c) => c.channel.title === "chan_slide title"),
+			)?.stage;
+		};
+
+		// Discovery: a proven but old, slow-moving channel. With a single snapshot,
+		// momentum is the views/age proxy — 150k over 90 days barely moves ⇒ cooled
+		// ⇒ Established.
+		await t.action(async (ctx) =>
+			runDiscovery(
+				ctx,
+				stubAdapter({
+					trending: longVideos("chan_slide", {
+						count: 3,
+						viewCount: 150_000,
+						ageDays: 90,
+					}),
+				}),
+			),
+		);
+		expect(await columnOf()).toBe("established");
+
+		// Two days on, a snapshot cycle catches the videos surging to 240k: a steep
+		// recent slope ⇒ strong momentum ⇒ the same card moves to Breaking Out.
+		vi.setSystemTime(t0 + 2 * DAY);
+		await t.action(async (ctx) =>
+			runSnapshot(ctx, stubAdapter({ statViews: 240_000 })),
+		);
+		expect(await columnOf()).toBe("breaking_out");
 	});
 });
