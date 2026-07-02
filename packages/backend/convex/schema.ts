@@ -39,7 +39,11 @@ export default defineSchema({
 		form: formValidator,
 		publishedAt: v.number(),
 		isStandard: v.boolean(),
-	}).index("by_channel_and_publishedAt", ["channelId", "publishedAt"]),
+	})
+		.index("by_channel_and_publishedAt", ["channelId", "publishedAt"])
+		// Ingestion upserts videos by their YouTube id and the snapshot cron looks
+		// them up the same way, so both paths need a direct lookup on `ytId`.
+		.index("by_ytId", ["ytId"]),
 
 	// The Momentum time-series: point-in-time view counts (ADR-0001). The latest
 	// snapshot per video is its current view count for the Proven gate.
