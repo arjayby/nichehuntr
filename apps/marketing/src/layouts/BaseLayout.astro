@@ -1,0 +1,65 @@
+---
+import "../styles/global.css";
+
+/**
+ * Base HTML shell for every marketing/blog page.
+ *
+ * Owns the SEO-critical <head>: title, description, canonical, Open Graph and
+ * Twitter cards. Canonical + OG URLs are derived from `Astro.site`
+ * (https://nichehuntr.com) so they're always absolute and correct in prod.
+ */
+interface Props {
+	title: string;
+	description: string;
+	/** Path-relative OG image, defaults to a static social card. */
+	image?: string;
+	/** Set true on non-indexable pages (e.g. thank-you). */
+	noindex?: boolean;
+}
+
+const {
+	title,
+	description,
+	image = "/og-default.png",
+	noindex = false,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL(image, Astro.site).href;
+const siteName = "NicheHuntr";
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" href="/favicon.ico" />
+		<meta name="generator" content={Astro.generator} />
+
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<link rel="canonical" href={canonical} />
+		{noindex && <meta name="robots" content="noindex, nofollow" />}
+
+		<!-- Open Graph -->
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content={siteName} />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:url" content={canonical} />
+		<meta property="og:image" content={ogImage} />
+
+		<!-- Twitter -->
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={ogImage} />
+
+		<link rel="alternate" type="application/rss+xml" title={siteName} href="/rss.xml" />
+	</head>
+	<body class="min-h-svh bg-background text-foreground antialiased">
+		<slot />
+	</body>
+</html>

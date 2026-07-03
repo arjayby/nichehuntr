@@ -1,0 +1,7 @@
+# Cloudflare Pages honours this file.
+# Astro fingerprints everything in /_astro, so it's safe to cache forever.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/og-default.png
+  Cache-Control: public, max-age=86400
