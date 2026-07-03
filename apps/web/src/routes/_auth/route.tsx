@@ -1,32 +1,35 @@
-import { Outlet, createFileRoute } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Navigate,
+	Outlet,
+	redirect,
+} from "@tanstack/react-router";
 import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
-import { useState } from "react";
 
-import SignInForm from "@/components/sign-in-form";
-import SignUpForm from "@/components/sign-up-form";
+import Loader from "@/components/loader";
 
 export const Route = createFileRoute("/_auth")({
-  component: AuthLayout,
+	beforeLoad: ({ context, location }) => {
+		if (!context.isAuthenticated) {
+			throw redirect({ to: "/login", search: { redirect: location.href } });
+		}
+	},
+	component: AuthLayout,
 });
 
 function AuthLayout() {
-  const [showSignIn, setShowSignIn] = useState(false);
-
-  return (
-    <>
-      <Authenticated>
-        <Outlet />
-      </Authenticated>
-      <Unauthenticated>
-        {showSignIn ? (
-          <SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
-        ) : (
-          <SignUpForm onSwitchToSignIn={() => setShowSignIn(true)} />
-        )}
-      </Unauthenticated>
-      <AuthLoading>
-        <div>Loading...</div>
-      </AuthLoading>
-    </>
-  );
+	return (
+		<>
+			<Authenticated>
+				<Outlet />
+			</Authenticated>
+			{/* Client-side token expiry after the server check passed. */}
+			<Unauthenticated>
+				<Navigate to="/login" />
+			</Unauthenticated>
+			<AuthLoading>
+				<Loader />
+			</AuthLoading>
+		</>
+	);
 }
