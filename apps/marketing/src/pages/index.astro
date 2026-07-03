@@ -1,92 +1,638 @@
 ---
 import Footer from "../components/Footer.astro";
 import Header from "../components/Header.astro";
-import ParticleHero from "../components/ParticleHero.tsx";
+import ListingCardMock from "../components/ListingCardMock.astro";
 import BaseLayout from "../layouts/BaseLayout.astro";
 
 const APP_URL = "https://app.nichehuntr.com";
 
-const features = [
+/*
+ * Hero cards: one fictional listing per lifecycle stage, so the first viewport
+ * teaches the product's core mental model (Emerging → Breaking Out →
+ * Established) with the app's real card anatomy.
+ */
+const heroCards = [
 	{
-		title: "Momentum, not hype",
-		body: "Surface niches on the way up — rising demand you can still enter, not saturated markets you've already missed.",
+		stage: "emerging",
+		card: {
+			title: "The Quiet Ledger",
+			handle: "thequietledger",
+			form: "long",
+			momentum: "+12%/d",
+			momentumTone: "up",
+			medianViews: "148K",
+			saturation: 2,
+			clonability: 74,
+			signals: [
+				{
+					label: "Format",
+					score: 81,
+					rationale: "Calm money storytelling over stock footage. Low production lift.",
+				},
+				{
+					label: "Demand",
+					score: 72,
+					rationale: "Comments beg for more uploads. The audience wants volume.",
+				},
+			],
+		},
 	},
 	{
-		title: "Real demand signals",
-		body: "Search interest, community growth, and unanswered questions, scored into a single clarity signal.",
+		stage: "breaking out",
+		card: {
+			title: "Midnight Archives",
+			handle: "midnightarchives",
+			form: "short",
+			momentum: "+34%/d",
+			momentumTone: "strong",
+			medianViews: "812K",
+			saturation: 4,
+			clonability: 82,
+			signals: [
+				{
+					label: "Format",
+					score: 88,
+					rationale: "Faceless narration over AI stills. One editor can run it.",
+				},
+				{
+					label: "Barrier",
+					score: 79,
+					rationale: "No on camera talent. The whole pipeline is replicable.",
+				},
+			],
+		},
 	},
 	{
-		title: "Saturation-aware",
-		body: "Know how crowded a space is before you commit, so you build where there's still room to win.",
+		stage: "established",
+		card: {
+			title: "Rainframe Ambience",
+			handle: "rainframeambience",
+			form: "long",
+			momentum: "0%/d",
+			momentumTone: "flat",
+			medianViews: "1.2M",
+			saturation: 23,
+			saturationHigh: true,
+			clonability: 41,
+			signals: [
+				{
+					label: "Barrier",
+					score: 35,
+					rationale: "Twenty three channels run the same loop. Too late to enter.",
+				},
+			],
+		},
+	},
+] as const;
+
+const stages = [
+	{
+		name: "Emerging",
+		verdict: "Early. Risky. First movers only.",
+		body: "Uploads are accelerating past the channel's own baseline, and almost nobody runs the niche yet. You could be first. You could also be early to a niche that never lands.",
+		highlight: false,
+	},
+	{
+		name: "Breaking Out",
+		verdict: "The window. Clone now.",
+		body: "Proven views, strong momentum, and only a handful of competitors. This is the column the whole product exists to find. When a niche sits here, the clock is running.",
+		highlight: true,
+	},
+	{
+		name: "Established",
+		verdict: "Too late. Scroll past.",
+		body: "The niche is crowded, or its growth already cooled. Big view counts here are a trap: the audience is split twenty ways and the algorithm has favorites. Keep your months of effort.",
+		highlight: false,
+	},
+];
+
+const faqs = [
+	{
+		q: "What exactly is NicheHuntr?",
+		a: "A discovery feed of YouTube channels that are provably working right now. Every listing is scored for momentum, saturation, and clonability, then placed in one of three lifecycle columns so you know whether the niche is worth entering today.",
+	},
+	{
+		q: "Is cloning a niche actually okay?",
+		a: "You clone the niche and the format, never the videos. Nobody owns a format. Every big niche on YouTube today started with someone copying a play that was already working and executing it better. The platform rewards it: duplicated niches are how the algorithm confirms demand.",
+	},
+	{
+		q: "What does proven mean here?",
+		a: "We take a channel's recent uploads, drop the ones too fresh to have settled, and check the median view count against a hard threshold. Median, not average, so one lucky viral cannot fake it. A channel that was huge years ago and is dead now fails the gate.",
+	},
+	{
+		q: "How do you know when a niche is too crowded?",
+		a: "Saturation counts how many similar channels already compete for the same audience. A handful is an open field. Twenty is a wall. When saturation is high, the niche reads Established no matter how fast it is still growing, because that growth is already spoken for.",
+	},
+	{
+		q: "Do you cover Shorts?",
+		a: "Yes. Long form and Shorts are scored separately, with separate proof thresholds, because 100K views means something completely different in each. A channel can be breaking out in Shorts while established in long form, and the feed shows both.",
+	},
+	{
+		q: "Is there a free plan?",
+		a: "No. One plan, $20 a month, or $15 a month billed annually. If a single niche pick saves you one month of uploading into the void, it has paid for itself many times over. Cancel anytime.",
 	},
 ];
 ---
 
 <BaseLayout
-	title="NicheHuntr — Find profitable niches before they're saturated"
-	description="NicheHuntr surfaces under-served niches with real, rising demand — so you build products people are already searching for."
+	title="NicheHuntr | Find proven YouTube niches worth cloning"
+	description="NicheHuntr tracks thousands of YouTube channels and surfaces the niches blowing up right now: proven views, rising momentum, and room for one more channel."
 >
 	<Header />
 
-	<!-- Hero: the one heavy/interactive region. The particle animation is a
-	     React island (client:visible) so its JS loads only here. -->
-	<section class="relative overflow-hidden">
-		<div class="absolute inset-0 -z-0">
-			<ParticleHero client:visible />
-		</div>
-		<div class="absolute inset-0 -z-0 bg-gradient-to-b from-transparent via-transparent to-background">
+	<!-- Hero: static text + a zero-JS product mockup built from real card anatomy. -->
+	<section class="relative overflow-hidden border-b border-border/60">
+		<div
+			class="pointer-events-none absolute inset-0 -z-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,--alpha(var(--color-primary)/12%),transparent)]"
+		>
 		</div>
 
-		<div class="relative z-10 mx-auto max-w-3xl px-6 py-32 text-center sm:py-40">
-			<h1 class="text-balance text-5xl font-bold tracking-tight sm:text-6xl">
-				Find profitable niches <span class="text-primary">before they're saturated</span>
-			</h1>
-			<p class="mx-auto mt-6 max-w-xl text-balance text-lg text-muted-foreground">
-				NicheHuntr reads real demand signals — search interest, community momentum, saturation — so
-				you build products people are already looking for.
-			</p>
-			<div class="mt-10 flex items-center justify-center gap-4">
-				<a
-					href={`${APP_URL}/signup`}
-					class="rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+		<div class="relative z-10 mx-auto max-w-6xl px-6 pt-24 sm:pt-32">
+			<div class="mx-auto max-w-3xl text-center">
+				<p
+					class="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-xs text-primary"
 				>
-					Start hunting
-				</a>
-				<a
-					href="/blog/"
-					class="rounded-md border border-border px-6 py-3 font-medium transition-colors hover:bg-muted"
-				>
-					Read the blog
-				</a>
+					<span class="relative flex h-2 w-2">
+						<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60"
+						></span>
+						<span class="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
+					</span>
+					// niche discovery for YouTube creators
+				</p>
+				<h1 class="text-balance text-4xl font-bold tracking-tight sm:text-6xl">
+					Stop guessing niches. <span class="text-primary">Clone what already works.</span>
+				</h1>
+				<p class="mx-auto mt-6 max-w-2xl text-balance text-base text-muted-foreground sm:text-lg">
+					You have uploaded for months and the algorithm gave you nothing. NicheHuntr tracks
+					thousands of channels and surfaces the niches blowing up right now: proven views, rising
+					momentum, and room for one more channel. Yours.
+				</p>
+				<div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+					<a
+						href={`${APP_URL}/signup`}
+						class="rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-opacity hover:opacity-90"
+					>
+						Start hunting
+					</a>
+					<a
+						href="#how-it-works"
+						class="rounded-md border border-border bg-background/60 px-6 py-3 font-medium transition-colors hover:bg-muted"
+					>
+						See how it works
+					</a>
+				</div>
+				<p class="mt-6 text-xs text-muted-foreground">$20 a month. No tiers. Cancel anytime.</p>
+			</div>
+
+			<!-- The feed, as it actually looks: one card per stage. -->
+			<div class="mt-16 grid gap-4 pb-20 sm:pb-24 lg:grid-cols-3 lg:items-start">
+				{
+					heroCards.map(({ stage, card }) => (
+						<div class:list={[stage === "breaking out" && "lg:-mt-4"]}>
+							<p
+								class:list={[
+									"mb-2 text-center text-[10px] uppercase tracking-widest",
+									stage === "breaking out" ? "text-primary" : "text-muted-foreground",
+								]}
+							>
+								// {stage}
+							</p>
+							<ListingCardMock
+								{...card}
+								class={
+									stage === "breaking out"
+										? "border-primary/60 shadow-xl shadow-primary/10"
+										: stage === "established"
+											? "opacity-60"
+											: ""
+								}
+							/>
+						</div>
+					))
+				}
 			</div>
 		</div>
 	</section>
 
 	<!-- Everything below the hero is static, zero-JS .astro. -->
-	<section class="mx-auto max-w-5xl px-6 py-24">
-		<div class="grid gap-8 sm:grid-cols-3">
-			{
-				features.map((f) => (
-					<div class="rounded-lg border border-border bg-card p-6">
-						<h3 class="text-lg font-semibold">{f.title}</h3>
-						<p class="mt-2 text-muted-foreground">{f.body}</p>
-					</div>
-				))
-			}
+	<section id="how-it-works" class="scroll-mt-20">
+		<div class="mx-auto max-w-6xl px-6 py-24">
+			<div class="mx-auto max-w-2xl text-center">
+				<p class="text-sm text-primary">// how it works</p>
+				<h2 class="mt-3 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+					Every niche has a window. We tell you where it is.
+				</h2>
+				<p class="mt-4 text-muted-foreground">
+					Listings move left to right as a niche matures. Momentum pushes a niche forward.
+					Saturation closes the door behind it. You want the middle column.
+				</p>
+			</div>
+
+			<div class="mt-16 grid gap-6 lg:grid-cols-3">
+				{
+					stages.map((stage, i) => (
+						<div
+							class:list={[
+								"relative rounded-xl border p-6",
+								stage.highlight
+									? "border-primary/60 bg-card shadow-xl shadow-primary/10"
+									: "border-border bg-card/50",
+							]}
+						>
+							<div class="flex items-center justify-between">
+								<span
+									class:list={[
+										"text-xs tabular-nums",
+										stage.highlight ? "text-primary" : "text-muted-foreground",
+									]}
+								>
+									0{i + 1}
+								</span>
+								{stage.highlight && (
+									<span class="rounded-full bg-primary px-3 py-0.5 text-xs font-semibold text-primary-foreground">
+										clone here
+									</span>
+								)}
+							</div>
+							<h3 class="mt-4 text-xl font-bold">{stage.name}</h3>
+							<p
+								class:list={[
+									"mt-1 text-sm font-medium",
+									stage.highlight ? "text-primary" : "text-muted-foreground",
+								]}
+							>
+								{stage.verdict}
+							</p>
+							<p class="mt-4 text-sm leading-relaxed text-muted-foreground">{stage.body}</p>
+						</div>
+					))
+				}
+			</div>
 		</div>
 	</section>
 
-	<section class="mx-auto max-w-3xl px-6 pb-24 text-center">
-		<h2 class="text-3xl font-bold tracking-tight">Stop guessing. Start hunting.</h2>
-		<p class="mx-auto mt-4 max-w-lg text-muted-foreground">
-			Join builders who validate demand before writing a line of code.
-		</p>
-		<a
-			href={`${APP_URL}/signup`}
-			class="mt-8 inline-block rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
-		>
-			Get started free
-		</a>
+	<section id="signals" class="scroll-mt-20 border-t border-border/60">
+		<div class="mx-auto max-w-6xl px-6 py-24">
+			<div class="mx-auto max-w-2xl text-center">
+				<p class="text-sm text-primary">// signals</p>
+				<h2 class="mt-3 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+					Four signals. One question: should you clone it?
+				</h2>
+				<p class="mt-4 text-muted-foreground">
+					No keyword spreadsheets. No vibes. Every listing carries the same four reads, straight
+					from the feed.
+				</p>
+			</div>
+
+			<div class="mt-20 space-y-20">
+				<!-- 1. Proven gate -->
+				<div class="grid items-center gap-10 lg:grid-cols-2">
+					<div>
+						<h3 class="text-2xl font-bold tracking-tight">Proof before anything else</h3>
+						<p class="mt-4 leading-relaxed text-muted-foreground">
+							Subscriber counts lie. A single viral lies harder. A channel only enters the feed
+							when the median view count of its recent uploads clears a hard threshold. Median,
+							not average, so one lucky hit and one dud change nothing. If it passes, the niche
+							pays consistently. If it was huge two years ago and is dead now, it never shows up.
+						</p>
+					</div>
+					<div class="rounded-xl border border-border bg-card p-6">
+						<p class="text-xs text-muted-foreground">// last 12 uploads, median vs gate</p>
+						<div class="relative mt-6 flex h-32 items-end gap-2">
+							<div
+								class="absolute inset-x-0 bottom-[55%] border-t border-dashed border-primary/60"
+							>
+								<span class="absolute -top-5 right-0 text-[10px] text-primary">median 812K</span>
+							</div>
+							{
+								[45, 62, 38, 71, 96, 12, 58, 66, 52, 88, 49, 74].map((h) => (
+									<div
+										class:list={[
+											"flex-1 rounded-t-sm",
+											h >= 55 ? "bg-primary/70" : "bg-muted-foreground/30",
+										]}
+										style={`height:${h}%`}
+									/>
+								))
+							}
+						</div>
+						<div class="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs">
+							<span class="text-muted-foreground">Shorts gate: 500K per video</span>
+							<span class="rounded-full bg-primary px-2.5 py-0.5 font-semibold text-primary-foreground"
+								>PASS</span
+							>
+						</div>
+					</div>
+				</div>
+
+				<!-- 2. Momentum -->
+				<div class="grid items-center gap-10 lg:grid-cols-2">
+					<div class="lg:order-2">
+						<h3 class="text-2xl font-bold tracking-tight">Momentum you can time</h3>
+						<p class="mt-4 leading-relaxed text-muted-foreground">
+							We snapshot every channel on a schedule and measure how fast its recent videos grow
+							against the channel's own baseline. Not against MrBeast. Against itself. A niche
+							accelerating today beats a niche that peaked last year, and the badge on every card
+							tells you which one you are looking at.
+						</p>
+					</div>
+					<div class="rounded-xl border border-border bg-card p-6 lg:order-1">
+						<p class="text-xs text-muted-foreground">// recent daily growth vs own baseline</p>
+						<div class="mt-5 space-y-4">
+							<div class="flex items-center justify-between">
+								<span
+									class="inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-xs font-medium tabular-nums text-primary-foreground"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										class="size-3"
+										aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17M16 7h6v6"></path></svg
+									>
+									+34%/d
+								</span>
+								<span class="text-xs text-muted-foreground">accelerating hard. the window.</span>
+							</div>
+							<div class="flex items-center justify-between">
+								<span class="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										class="size-3.5"
+										aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17M16 7h6v6"></path></svg
+									>
+									+9%/d
+								</span>
+								<span class="text-xs text-muted-foreground">warming up. watch it.</span>
+							</div>
+							<div class="flex items-center justify-between">
+								<span
+									class="inline-flex items-center gap-1 text-xs font-medium tabular-nums text-muted-foreground"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										class="size-3.5"
+										aria-hidden="true"><path d="M5 12h14"></path></svg
+									>
+									0%/d
+								</span>
+								<span class="text-xs text-muted-foreground">cooled off. the window closed.</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 3. Saturation -->
+				<div class="grid items-center gap-10 lg:grid-cols-2">
+					<div>
+						<h3 class="text-2xl font-bold tracking-tight">Saturation before you commit</h3>
+						<p class="mt-4 leading-relaxed text-muted-foreground">
+							How many channels already run this exact play? Four is an open field. Twenty three is
+							a wall. Big view counts in a crowded niche are not opportunity, they are attention
+							already split twenty ways. You see the count on every card before you spend a single
+							weekend building.
+						</p>
+					</div>
+					<div class="rounded-xl border border-border bg-card p-6">
+						<p class="text-xs text-muted-foreground">// similar channels in the niche</p>
+						<div class="mt-5 space-y-5">
+							<div>
+								<div class="flex items-center justify-between text-xs">
+									<span>faceless AI horror Shorts</span>
+									<span class="font-medium tabular-nums text-primary">4 · open field</span>
+								</div>
+								<div class="mt-2 flex gap-1.5">
+									{[1, 2, 3, 4].map(() => <span class="size-3 rounded-full bg-primary/70" />)}
+								</div>
+							</div>
+							<div>
+								<div class="flex items-center justify-between text-xs">
+									<span>rain ambience loops</span>
+									<span class="font-medium tabular-nums text-destructive">23 · crowded</span>
+								</div>
+								<div class="mt-2 flex flex-wrap gap-1.5">
+									{
+										Array.from({ length: 23 }).map(() => (
+											<span class="size-3 rounded-full bg-destructive/50" />
+										))
+									}
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 4. Clonability -->
+				<div class="grid items-center gap-10 lg:grid-cols-2">
+					<div class="lg:order-2">
+						<h3 class="text-2xl font-bold tracking-tight">A score with receipts</h3>
+						<p class="mt-4 leading-relaxed text-muted-foreground">
+							Every listing gets a clonability score, plus written rationales for the signals
+							underneath it: the format, the barrier to entry, what it actually takes to run the
+							channel. Not just a number to sort by. The why, in one line each, so you can disagree
+							with it.
+						</p>
+					</div>
+					<div class="rounded-xl border border-border bg-card p-6 lg:order-1">
+						<div class="flex items-baseline justify-between">
+							<p class="text-xs text-muted-foreground">// clonability</p>
+							<p class="text-4xl font-bold tabular-nums text-primary">82</p>
+						</div>
+						<div class="mt-4 space-y-2.5 border-t border-border pt-4">
+							<div class="flex items-baseline gap-2 text-xs">
+								<span class="w-14 shrink-0 font-medium">Format</span>
+								<span class="shrink-0 tabular-nums text-muted-foreground">88</span>
+								<span class="text-muted-foreground"
+									>Faceless narration over AI stills. One editor can run it.</span
+								>
+							</div>
+							<div class="flex items-baseline gap-2 text-xs">
+								<span class="w-14 shrink-0 font-medium">Barrier</span>
+								<span class="shrink-0 tabular-nums text-muted-foreground">79</span>
+								<span class="text-muted-foreground"
+									>No on camera talent. The whole pipeline is replicable.</span
+								>
+							</div>
+							<div class="flex items-baseline gap-2 text-xs">
+								<span class="w-14 shrink-0 font-medium">Demand</span>
+								<span class="shrink-0 tabular-nums text-muted-foreground">75</span>
+								<span class="text-muted-foreground"
+									>Watch time holds through full episodes. The niche retains.</span
+								>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- Pricing: single plan, CSS-only monthly/annual toggle (checkbox + :has). -->
+	<section id="pricing" class="group/pricing scroll-mt-20 border-t border-border/60">
+		<div class="mx-auto max-w-6xl px-6 py-24">
+			<div class="mx-auto max-w-2xl text-center">
+				<p class="text-sm text-primary">// pricing</p>
+				<h2 class="mt-3 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+					One plan. Cheaper than another month of guessing.
+				</h2>
+				<p class="mt-4 text-muted-foreground">
+					Every signal, every column, the full feed. No tiers to decode, no features held hostage.
+				</p>
+			</div>
+
+			<div class="mt-10 flex justify-center">
+				<label
+					class="flex cursor-pointer select-none items-center rounded-full border border-border p-1 text-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+				>
+					<input type="checkbox" class="sr-only" aria-label="Bill annually" />
+					<span
+						class="rounded-full bg-primary px-4 py-1.5 font-medium text-primary-foreground group-has-[:checked]/pricing:bg-transparent group-has-[:checked]/pricing:font-normal group-has-[:checked]/pricing:text-muted-foreground"
+					>
+						Monthly
+					</span>
+					<span
+						class="rounded-full px-4 py-1.5 text-muted-foreground group-has-[:checked]/pricing:bg-primary group-has-[:checked]/pricing:font-medium group-has-[:checked]/pricing:text-primary-foreground"
+					>
+						Annual · save 25%
+					</span>
+				</label>
+			</div>
+
+			<div class="mx-auto mt-10 max-w-md">
+				<div class="relative rounded-xl border border-primary bg-card p-8 shadow-xl shadow-primary/10">
+					<p
+						class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground"
+					>
+						Hunter
+					</p>
+					<p class="mt-2 flex items-baseline justify-center gap-1">
+						<span class="text-5xl font-bold tracking-tight tabular-nums">
+							<span class="group-has-[:checked]/pricing:hidden">$20</span>
+							<span class="hidden group-has-[:checked]/pricing:inline">$15</span>
+						</span>
+						<span class="text-sm text-muted-foreground">per month</span>
+					</p>
+					<p class="mt-2 text-center text-xs text-muted-foreground">
+						<span class="group-has-[:checked]/pricing:hidden">Billed monthly. Cancel anytime.</span>
+						<span class="hidden group-has-[:checked]/pricing:inline"
+							>$180 billed once a year. Cancel anytime.</span
+						>
+					</p>
+					<ul class="mt-8 space-y-3 text-sm">
+						{
+							[
+								"The full discovery feed, updated continuously",
+								"All three lifecycle columns",
+								"Momentum measured from scheduled snapshots",
+								"Saturation counts on every niche",
+								"Clonability scores with written rationales",
+								"Long form and Shorts scored separately",
+							].map((item) => (
+								<li class="flex items-start gap-3">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2.5"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										class="mt-0.5 h-4 w-4 shrink-0 text-primary"
+										aria-hidden="true"
+									>
+										<path d="M20 6L9 17l-5-5" />
+									</svg>
+									<span>{item}</span>
+								</li>
+							))
+						}
+					</ul>
+					<a
+						href={`${APP_URL}/signup`}
+						class="mt-8 block rounded-md bg-primary px-6 py-3 text-center font-medium text-primary-foreground transition-opacity hover:opacity-90"
+					>
+						Start hunting
+					</a>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<section id="faq" class="scroll-mt-20 border-t border-border/60">
+		<div class="mx-auto max-w-3xl px-6 py-24">
+			<div class="text-center">
+				<p class="text-sm text-primary">// faq</p>
+				<h2 class="mt-3 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+					Questions creators actually ask
+				</h2>
+			</div>
+
+			<!-- Native <details> keeps the accordion zero-JS and accessible. -->
+			<div class="mt-12 space-y-3">
+				{
+					faqs.map((faq) => (
+						<details class="group rounded-lg border border-border bg-card/50 open:bg-card">
+							<summary class="flex cursor-pointer items-center justify-between gap-4 p-5 font-medium [&::-webkit-details-marker]:hidden">
+								{faq.q}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									class="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+									aria-hidden="true"
+								>
+									<path d="M6 9l6 6 6-6" />
+								</svg>
+							</summary>
+							<p class="px-5 pb-5 text-sm leading-relaxed text-muted-foreground">{faq.a}</p>
+						</details>
+					))
+				}
+			</div>
+		</div>
+	</section>
+
+	<section class="border-t border-border/60">
+		<div class="mx-auto max-w-4xl px-6 py-24">
+			<div
+				class="relative overflow-hidden rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-card to-card px-8 py-16 text-center"
+			>
+				<h2 class="text-balance text-3xl font-bold tracking-tight sm:text-4xl">
+					The next breakout niche is already on the feed.
+				</h2>
+				<p class="mx-auto mt-4 max-w-lg text-muted-foreground">
+					Somewhere on YouTube right now, a small channel is quietly printing views in a niche with
+					room for one more. Find it before the crowd does.
+				</p>
+				<a
+					href={`${APP_URL}/signup`}
+					class="mt-8 inline-block rounded-md bg-primary px-8 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-opacity hover:opacity-90"
+				>
+					Start hunting
+				</a>
+				<p class="mt-4 text-xs text-muted-foreground">$20 a month · cancel anytime</p>
+			</div>
+		</div>
 	</section>
 
 	<Footer />
