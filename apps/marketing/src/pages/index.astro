@@ -170,13 +170,13 @@ const faqs = [
 				<div class="mt-10 flex flex-wrap items-center justify-center gap-4">
 					<a
 						href={`${APP_URL}/signup`}
-						class="rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-opacity hover:opacity-90"
+						class="rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-colors hover:bg-primary/80"
 					>
 						Start hunting
 					</a>
 					<a
 						href="#how-it-works"
-						class="rounded-md border border-border bg-background/60 px-6 py-3 font-medium transition-colors hover:bg-muted"
+						class="rounded-md border border-border bg-background/60 px-6 py-3 font-medium shadow-xs transition-colors hover:bg-muted"
 					>
 						See how it works
 					</a>
@@ -498,7 +498,7 @@ const faqs = [
 
 			<div class="mt-10 flex justify-center">
 				<label
-					class="flex cursor-pointer select-none items-center rounded-full border border-border p-1 text-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+					class="flex cursor-pointer select-none items-center rounded-full border border-border p-1 text-xs has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50"
 				>
 					<input type="checkbox" class="sr-only" aria-label="Bill annually" />
 					<span
@@ -565,7 +565,7 @@ const faqs = [
 					</ul>
 					<a
 						href={`${APP_URL}/signup`}
-						class="mt-8 block rounded-md bg-primary px-6 py-3 text-center font-medium text-primary-foreground transition-opacity hover:opacity-90"
+						class="mt-8 block rounded-md bg-primary px-6 py-3 text-center font-medium text-primary-foreground transition-colors hover:bg-primary/80"
 					>
 						Start hunting
 					</a>
@@ -587,7 +587,7 @@ const faqs = [
 			<div class="mt-12 space-y-3">
 				{
 					faqs.map((faq) => (
-						<details class="group rounded-lg border border-border bg-card/50 open:bg-card">
+						<details class="group rounded-xl border border-border bg-card/50 open:bg-card">
 							<summary class="flex cursor-pointer items-center justify-between gap-4 p-5 font-medium [&::-webkit-details-marker]:hidden">
 								{faq.q}
 								<svg
@@ -615,7 +615,7 @@ const faqs = [
 	<section class="border-t border-border/60">
 		<div class="mx-auto max-w-4xl px-6 py-24">
 			<div
-				class="relative overflow-hidden rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/15 via-card to-card px-8 py-16 text-center"
+				class="relative overflow-hidden rounded-xl border border-primary/30 bg-gradient-to-br from-primary/15 via-card to-card px-8 py-16 text-center"
 			>
 				<h2 class="text-balance text-3xl font-bold tracking-tight sm:text-4xl">
 					The next breakout niche is already on the feed.
@@ -626,7 +626,7 @@ const faqs = [
 				</p>
 				<a
 					href={`${APP_URL}/signup`}
-					class="mt-8 inline-block rounded-md bg-primary px-8 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-opacity hover:opacity-90"
+					class="mt-8 inline-block rounded-md bg-primary px-8 py-3 font-medium text-primary-foreground shadow-lg shadow-primary/20 transition-colors hover:bg-primary/80"
 				>
 					Start hunting
 				</a>
