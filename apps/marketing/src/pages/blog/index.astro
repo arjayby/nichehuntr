@@ -3,6 +3,7 @@ import { getCollection } from "astro:content";
 import Footer from "../../components/Footer.astro";
 import Header from "../../components/Header.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import { readingTime } from "../../lib/reading-time";
 
 // Exclude drafts in production; sort newest first.
 const posts = (
@@ -10,10 +11,6 @@ const posts = (
 ).sort((a, b) => b.data.pubDate.getTime() - a.data.pubDate.getTime());
 
 const dateFmt = new Intl.DateTimeFormat("en-US", { dateStyle: "long" });
-
-/** ~200 wpm, floored at 1 — a rough but honest estimate from the raw markdown. */
-const readingTime = (body: string | undefined) =>
-	Math.max(1, Math.round((body ?? "").split(/\s+/).length / 200));
 ---
 
 <BaseLayout

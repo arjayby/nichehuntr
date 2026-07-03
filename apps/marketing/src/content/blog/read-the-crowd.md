@@ -47,6 +47,26 @@ Rough bands, from watching this play out over and over:
   and bring an angle.
 - **Beyond that:** a wall wearing a niche costume. Pass without regret.
 
+<figure>
+<svg viewBox="0 0 640 150" role="img" aria-label="A number line of live channels running the same niche, from zero to twenty-five plus, split into three bands: under 5 is the open field, 5 to 12 is the land grab, beyond 12 is the wall." style="width:100%;height:auto">
+<text x="24" y="26" font-size="11" fill="var(--muted-foreground)">0</text>
+<text x="142" y="26" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">5</text>
+<text x="308" y="26" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">12</text>
+<text x="616" y="26" text-anchor="end" font-size="11" fill="var(--muted-foreground)">25+</text>
+<rect x="24" y="36" width="116" height="50" rx="4" fill="var(--primary)" fill-opacity="0.15" stroke="var(--primary)" stroke-opacity="0.4"/>
+<rect x="144" y="36" width="162" height="50" rx="4" fill="var(--muted-foreground)" fill-opacity="0.12" stroke="var(--muted-foreground)" stroke-opacity="0.35"/>
+<rect x="310" y="36" width="306" height="50" rx="4" fill="var(--destructive)" fill-opacity="0.12" stroke="var(--destructive)" stroke-opacity="0.35"/>
+<text x="82" y="65" text-anchor="middle" font-size="12" letter-spacing="1.5" fill="var(--primary)">OPEN FIELD</text>
+<text x="225" y="65" text-anchor="middle" font-size="12" letter-spacing="1.5" fill="var(--foreground)">LAND GRAB</text>
+<text x="463" y="65" text-anchor="middle" font-size="12" letter-spacing="1.5" fill="var(--destructive)">THE WALL</text>
+<text x="82" y="104" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">the entry</text>
+<text x="225" y="104" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">ship fast + an angle</text>
+<text x="463" y="104" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">pass without regret</text>
+<text x="320" y="134" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">live channels running the same play</text>
+</svg>
+<figcaption>Saturation is a count. Under five live channels is a window; past twelve is a wall.</figcaption>
+</figure>
+
 ## Crowding beats momentum. Always.
 
 This is the rule worth tattooing somewhere: a crowded niche is a closed niche

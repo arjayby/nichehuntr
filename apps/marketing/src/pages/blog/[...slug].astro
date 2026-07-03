@@ -3,6 +3,7 @@ import { getCollection, render } from "astro:content";
 import Footer from "../../components/Footer.astro";
 import Header from "../../components/Header.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import { readingTime } from "../../lib/reading-time";
 
 const APP_URL = "https://app.nichehuntr.com";
 
@@ -22,10 +23,7 @@ const { post } = Astro.props;
 const { Content } = await render(post);
 
 const dateFmt = new Intl.DateTimeFormat("en-US", { dateStyle: "long" });
-const readingTime = Math.max(
-	1,
-	Math.round((post.body ?? "").split(/\s+/).length / 200),
-);
+const minutes = readingTime(post.body);
 ---
 
 <BaseLayout title={`${post.data.title} | NicheHuntr`} description={post.data.description}>
@@ -46,7 +44,7 @@ const readingTime = Math.max(
 						{dateFmt.format(post.data.pubDate)}
 					</time>
 					<span aria-hidden="true">·</span>
-					<span>{readingTime} min read</span>
+					<span>{minutes} min read</span>
 					{
 						post.data.updatedDate && (
 							<>

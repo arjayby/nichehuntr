@@ -41,6 +41,33 @@ matters: **what does a normal video in this niche earn?** If the normal video
 clears a serious bar, the niche pays consistently. Consistency is what you can
 clone. Luck is not.
 
+<figure>
+<svg viewBox="0 0 640 300" role="img" aria-label="Bar chart of a channel's last 12 uploads. Eleven videos earn 7 to 15 thousand views and one outlier earns 60 thousand. A dashed average line sits at 14.7K, dragged up by the outlier; a solid median line sits at 10.5K, what a normal video actually earns." style="width:100%;height:auto">
+<line x1="24" y1="13" x2="44" y2="13" stroke="var(--primary)" stroke-width="2"/>
+<text x="52" y="17" font-size="12" fill="var(--foreground)">median 10.5K &#183; what a normal video earns</text>
+<line x1="24" y1="35" x2="44" y2="35" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="4 4"/>
+<text x="52" y="39" font-size="12" fill="var(--muted-foreground)">average 14.7K &#183; dragged up by one hit</text>
+<rect x="37" y="220" width="24" height="40" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="86" y="233" width="24" height="27" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="135" y="210" width="24" height="50" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="185" y="227" width="24" height="33" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="234" y="230" width="24" height="30" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="283" y="60" width="24" height="200" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="333" y="223" width="24" height="37" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="382" y="217" width="24" height="43" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="431" y="237" width="24" height="23" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="481" y="220" width="24" height="40" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="530" y="227" width="24" height="33" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<rect x="579" y="230" width="24" height="30" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
+<text x="295" y="52" text-anchor="middle" font-size="12" fill="var(--muted-foreground)">the outlier &#183; 60K</text>
+<line x1="24" y1="211" x2="616" y2="211" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="4 4"/>
+<line x1="24" y1="225" x2="616" y2="225" stroke="var(--primary)" stroke-width="2"/>
+<line x1="24" y1="260" x2="616" y2="260" stroke="var(--border)" stroke-width="1"/>
+<text x="320" y="286" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">last 12 uploads &#183; views in thousands</text>
+</svg>
+<figcaption>One hit drags the average 40% above what a normal upload earns. The median does not move.</figcaption>
+</figure>
+
 ## What counts as passing
 
 The bar depends on format, because views are not one currency:

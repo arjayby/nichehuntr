@@ -16,6 +16,24 @@ The niche was real. Your timing was the problem.
 Timing is fixable, but only if you can see where a niche sits in its lifecycle.
 There are three stages, and only one of them wants you.
 
+<figure>
+<svg viewBox="0 0 640 260" role="img" aria-label="A niche's attention curve over time, split into three stages. Emerging: nearly flat with a hint of a slope. Breaking out: steep acceleration, shaded as the window, with the entry point marked at its start. Established: high but flattening, where the door has closed." style="width:100%;height:auto">
+<rect x="221" y="26" width="198" height="184" fill="var(--primary)" fill-opacity="0.08"/>
+<line x1="221" y1="26" x2="221" y2="210" stroke="var(--primary)" stroke-width="1" stroke-dasharray="4 4" stroke-opacity="0.6"/>
+<line x1="419" y1="26" x2="419" y2="210" stroke="var(--primary)" stroke-width="1" stroke-dasharray="4 4" stroke-opacity="0.6"/>
+<text x="320" y="46" text-anchor="middle" font-size="12" letter-spacing="2" fill="var(--primary)">THE WINDOW</text>
+<path d="M 24 196 C 100 193 165 184 221 158 C 285 128 340 72 419 58 C 470 49 545 52 616 64" fill="none" stroke="var(--foreground)" stroke-width="2"/>
+<circle cx="221" cy="158" r="5" fill="var(--primary)" stroke="var(--background)" stroke-width="2"/>
+<text x="234" y="176" font-size="12" fill="var(--primary)">&#8592; enter here</text>
+<line x1="24" y1="210" x2="616" y2="210" stroke="var(--border)" stroke-width="1"/>
+<text x="122" y="234" text-anchor="middle" font-size="11" letter-spacing="1.5" fill="var(--muted-foreground)">01 EMERGING</text>
+<text x="320" y="234" text-anchor="middle" font-size="11" letter-spacing="1.5" fill="var(--foreground)">02 BREAKING OUT</text>
+<text x="517" y="234" text-anchor="middle" font-size="11" letter-spacing="1.5" fill="var(--muted-foreground)">03 ESTABLISHED</text>
+<text x="320" y="256" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">median views of the niche&#8217;s channels &#183; time &#8594;</text>
+</svg>
+<figcaption>Stage two is the only stage that wants you: proof is in, supply has not caught up.</figcaption>
+</figure>
+
 ## Stage one: Emerging
 
 Somewhere on YouTube, a small channel's recent uploads start accelerating past
