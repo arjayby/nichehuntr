@@ -1,4 +1,5 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
+import { topSignals } from "@nichehuntr/backend/convex/model/clonability";
 import {
 	MOMENTUM_MODEST,
 	MOMENTUM_STRONG,
@@ -112,6 +113,61 @@ function SaturationRead({ saturation }: { saturation: number | null }) {
 	);
 }
 
+/**
+ * Clonability score: the tunable weighted mean of this form's signals (CONTEXT.md).
+ * It's the within-column sort key, so it reads as the card's headline number. A
+ * dash until the enrich cron scores the Listing — Clonability never gates (ADR-0003).
+ */
+function ClonabilityRead({ card }: { card: FeedCard }) {
+	return (
+		<div className="text-right">
+			<div className="text-muted-foreground text-xs">Clonability</div>
+			<div
+				className="font-semibold text-lg tabular-nums"
+				title={
+					card.clonability === null
+						? "Clonability pending"
+						: "Weighted mean of this form's signals"
+				}
+			>
+				{card.clonability ?? "—"}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The top signal rationales behind the Clonability score — the one-line reasons
+ * the Enrichment pass gave, so the Operator sees *why* it's a clone target, not
+ * just the number. Renders nothing until the Listing is enriched.
+ */
+function SignalRationales({ card }: { card: FeedCard }) {
+	const tops = topSignals(card.signals, card.form, 2);
+	if (tops.length === 0) {
+		return null;
+	}
+	return (
+		<div className="mt-3 flex flex-col gap-1 border-t pt-2">
+			{tops.map((signal) => (
+				<div key={signal.name} className="flex items-baseline gap-1.5 text-xs">
+					<span className="shrink-0 font-medium text-foreground">
+						{signal.label}
+					</span>
+					<span className="shrink-0 text-muted-foreground tabular-nums">
+						{signal.score}
+					</span>
+					<span
+						className="truncate text-muted-foreground"
+						title={signal.rationale}
+					>
+						{signal.rationale}
+					</span>
+				</div>
+			))}
+		</div>
+	);
+}
+
 /** Up to two initials for the avatar fallback, e.g. "AI Horror Shorts" → "AH". */
 function initials(title: string): string {
 	return title
@@ -176,14 +232,10 @@ export function ListingCard({ card }: { card: FeedCard }) {
 							</div>
 						</div>
 						<SaturationRead saturation={card.saturation} />
-						<div className="text-right">
-							<div className="text-muted-foreground text-xs">Clonability</div>
-							<div className="font-medium tabular-nums">
-								{card.clonability ?? "—"}
-							</div>
-						</div>
+						<ClonabilityRead card={card} />
 						<ExternalLink className="size-4 self-center text-muted-foreground" />
 					</div>
+					<SignalRationales card={card} />
 				</CardContent>
 			</Card>
 		</a>

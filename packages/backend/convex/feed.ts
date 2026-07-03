@@ -2,6 +2,7 @@ import { v } from "convex/values";
 
 import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
+import type { Signals } from "./model/clonability";
 import type { Form, Stage } from "./model/deriveListings";
 import { formValidator, stageValidator } from "./model/validators";
 
@@ -27,6 +28,9 @@ export type FeedCard = {
 	/** Similar-channel count — the niche's crowdedness; null until measured. */
 	saturation: number | null;
 	clonability: number | null;
+	/** The per-signal Enrichment scores + rationales behind Clonability, so the
+	 * card can show why; null until the enrich cron scores this Listing. */
+	signals: Signals | null;
 	channel: {
 		ytId: string;
 		title: string;
@@ -91,6 +95,7 @@ export const feed = query({
 				momentum: listing.momentum,
 				saturation: listing.saturation,
 				clonability: listing.clonability,
+				signals: listing.signals,
 				channel: {
 					ytId: channel.ytId,
 					title: channel.title,

@@ -1,6 +1,7 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { deriveListings, type ProvenVideo } from "./deriveListings";
+import type { Signals } from "./clonability";
+import { deriveListings, type Form, type ProvenVideo } from "./deriveListings";
 
 /** How many recent uploads to load per channel when gating. Comfortably covers
  * both forms' windows plus fresh/non-standard items the gate then drops. */
@@ -100,11 +101,24 @@ export async function recomputeListingsForChannel(
 		saturation = density > 0 ? density : null;
 	}
 
+	// Enrichment is cached per (channel, form) in its own table so it survives this
+	// delete-and-reinsert recompute (ADR-0003): the enrich cron writes it out-of-band,
+	// and every recompute rides the latest signals back onto the fresh Listings.
+	const enrichmentRows = await ctx.db
+		.query("enrichments")
+		.withIndex("by_channel_and_form", (q) => q.eq("channelId", channelId))
+		.collect(); // at most one row per form
+	const enrichmentByForm: Partial<Record<Form, Signals>> = {};
+	for (const row of enrichmentRows) {
+		enrichmentByForm[row.form] = row.signals;
+	}
+
 	const derived = deriveListings({
 		channelId,
 		now: Date.now(),
 		videos: provenVideos,
 		saturation,
+		enrichmentByForm,
 	});
 
 	const existing = await ctx.db

@@ -81,6 +81,20 @@ export default defineSchema({
 		.index("by_channel", ["channelId"])
 		.index("by_form_and_proven", ["form", "proven"]),
 
+	// The Enrichment cache: one row per (channel, form) holding the multimodal
+	// Claude pass's per-signal scores (ADR-0003, Slice 5). Kept off the `listings`
+	// table because a recompute deletes and reinserts Listings, whereas enrichment
+	// is expensive and must persist and be reused across recomputes. `fingerprint`
+	// is a digest of the inputs the scores were derived from, so the enrich cron
+	// re-runs a Listing only when its metadata/thumbnails materially change.
+	enrichments: defineTable({
+		channelId: v.id("channels"),
+		form: formValidator,
+		signals: signalsValidator,
+		fingerprint: v.string(),
+		enrichedAt: v.number(),
+	}).index("by_channel_and_form", ["channelId", "form"]),
+
 	// The snowball graph (CONTEXT.md): a directed edge means `toChannelId` surfaced
 	// as related/featured off `fromChannelId` during snowball discovery. Its purpose
 	// is to populate same-niche clusters so vector search has neighbors to find; its

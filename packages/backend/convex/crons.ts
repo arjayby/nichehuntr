@@ -44,4 +44,14 @@ crons.interval(
 	{},
 );
 
+// Enrich proven Listings with subjective Clonability signals (ADR-0003). Spends
+// only the Anthropic budget (one multimodal call per stale Listing), and re-runs a
+// Listing only when its inputs materially change, so a steady catalog costs little.
+crons.interval(
+	"enrich clonability",
+	{ hours: 6 },
+	internal.enrichCron.enrichCron,
+	{},
+);
+
 export default crons;
