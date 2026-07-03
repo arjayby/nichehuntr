@@ -55,7 +55,7 @@ export default function SignUpForm({ redirectTo }: { redirectTo: string }) {
 	return (
 		<AuthShell
 			title="Create your account"
-			description="Start hunting niches in minutes."
+			description="Start hunting youtube niches"
 			footer={
 				<>
 					Already have an account?{" "}
