@@ -17,3 +17,12 @@
  * they use. Paths are relative to this file (apps/marketing/src/styles).
  */
 @source "../**/*.astro";
+
+/*
+ * Marketing is mono-everything (viteplus-style terminal aesthetic): remap the
+ * sans token so the body default and every font-sans utility resolve to
+ * JetBrains Mono. The app keeps Inter; only this site overrides.
+ */
+@theme {
+	--font-sans: "JetBrains Mono Variable", monospace;
+}

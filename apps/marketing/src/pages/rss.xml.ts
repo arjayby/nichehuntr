@@ -9,7 +9,7 @@ export async function GET(context: APIContext) {
 	return rss({
 		title: "NicheHuntr Blog",
 		description:
-			"Field notes on niche research, demand signals, and building for under-served markets.",
+			"Notes from the hunt: proof, momentum, and saturation for YouTube creators who clone what works.",
 		// context.site comes from `site` in astro.config.mjs (https://nichehuntr.com).
 		site: context.site ?? "https://nichehuntr.com",
 		items: posts.map((post) => ({
