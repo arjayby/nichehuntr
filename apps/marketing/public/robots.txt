@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://nichehuntr.com/sitemap-index.xml

@@ -1,0 +1,25 @@
+---
+// App lives on the subdomain; every CTA is a plain cross-origin link (the
+// marketing site is fully decoupled — no auth/Convex client).
+const APP_URL = "https://app.nichehuntr.com";
+---
+
+<header class="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur">
+	<nav class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+		<a href="/" class="font-mono text-lg font-bold tracking-tight">
+			niche<span class="text-primary">huntr</span>
+		</a>
+		<div class="flex items-center gap-6 text-sm">
+			<a href="/blog/" class="text-muted-foreground transition-colors hover:text-foreground">Blog</a>
+			<a href={`${APP_URL}/login`} class="text-muted-foreground transition-colors hover:text-foreground">
+				Log in
+			</a>
+			<a
+				href={`${APP_URL}/signup`}
+				class="rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+			>
+				Get started
+			</a>
+		</div>
+	</nav>
+</header>

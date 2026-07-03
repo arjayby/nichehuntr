@@ -1,0 +1,19 @@
+/*
+ * Marketing app styles.
+ *
+ * The design system lives in @nichehuntr/ui — importing its globals.css gives us
+ * the exact same Tailwind v4 theme tokens (lime primary, JetBrains Mono/Inter,
+ * radius, light/dark palettes) as apps/web, so the marketing site is on-brand
+ * without depending on the React component library.
+ */
+@import "@nichehuntr/ui/globals.css";
+
+/* Readable typography for MDX blog content (<article class="prose">). */
+@plugin "@tailwindcss/typography";
+
+/*
+ * The shared globals only @source .ts/.tsx (the app's islands). Astro pages and
+ * components are .astro, so Tailwind needs to scan them here to emit the classes
+ * they use. Paths are relative to this file (apps/marketing/src/styles).
+ */
+@source "../**/*.astro";

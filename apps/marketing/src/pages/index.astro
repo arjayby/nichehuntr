@@ -1,0 +1,93 @@
+---
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import ParticleHero from "../components/ParticleHero.tsx";
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const APP_URL = "https://app.nichehuntr.com";
+
+const features = [
+	{
+		title: "Momentum, not hype",
+		body: "Surface niches on the way up — rising demand you can still enter, not saturated markets you've already missed.",
+	},
+	{
+		title: "Real demand signals",
+		body: "Search interest, community growth, and unanswered questions, scored into a single clarity signal.",
+	},
+	{
+		title: "Saturation-aware",
+		body: "Know how crowded a space is before you commit, so you build where there's still room to win.",
+	},
+];
+---
+
+<BaseLayout
+	title="NicheHuntr — Find profitable niches before they're saturated"
+	description="NicheHuntr surfaces under-served niches with real, rising demand — so you build products people are already searching for."
+>
+	<Header />
+
+	<!-- Hero: the one heavy/interactive region. The particle animation is a
+	     React island (client:visible) so its JS loads only here. -->
+	<section class="relative overflow-hidden">
+		<div class="absolute inset-0 -z-0">
+			<ParticleHero client:visible />
+		</div>
+		<div class="absolute inset-0 -z-0 bg-gradient-to-b from-transparent via-transparent to-background">
+		</div>
+
+		<div class="relative z-10 mx-auto max-w-3xl px-6 py-32 text-center sm:py-40">
+			<h1 class="text-balance text-5xl font-bold tracking-tight sm:text-6xl">
+				Find profitable niches <span class="text-primary">before they're saturated</span>
+			</h1>
+			<p class="mx-auto mt-6 max-w-xl text-balance text-lg text-muted-foreground">
+				NicheHuntr reads real demand signals — search interest, community momentum, saturation — so
+				you build products people are already looking for.
+			</p>
+			<div class="mt-10 flex items-center justify-center gap-4">
+				<a
+					href={`${APP_URL}/signup`}
+					class="rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+				>
+					Start hunting
+				</a>
+				<a
+					href="/blog/"
+					class="rounded-md border border-border px-6 py-3 font-medium transition-colors hover:bg-muted"
+				>
+					Read the blog
+				</a>
+			</div>
+		</div>
+	</section>
+
+	<!-- Everything below the hero is static, zero-JS .astro. -->
+	<section class="mx-auto max-w-5xl px-6 py-24">
+		<div class="grid gap-8 sm:grid-cols-3">
+			{
+				features.map((f) => (
+					<div class="rounded-lg border border-border bg-card p-6">
+						<h3 class="text-lg font-semibold">{f.title}</h3>
+						<p class="mt-2 text-muted-foreground">{f.body}</p>
+					</div>
+				))
+			}
+		</div>
+	</section>
+
+	<section class="mx-auto max-w-3xl px-6 pb-24 text-center">
+		<h2 class="text-3xl font-bold tracking-tight">Stop guessing. Start hunting.</h2>
+		<p class="mx-auto mt-4 max-w-lg text-muted-foreground">
+			Join builders who validate demand before writing a line of code.
+		</p>
+		<a
+			href={`${APP_URL}/signup`}
+			class="mt-8 inline-block rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+		>
+			Get started free
+		</a>
+	</section>
+
+	<Footer />
+</BaseLayout>

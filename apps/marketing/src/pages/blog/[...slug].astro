@@ -1,0 +1,42 @@
+---
+import { getCollection, render } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+// One static page per non-draft post (SSG — nothing runs at request time).
+export async function getStaticPaths() {
+	const posts = await getCollection(
+		"blog",
+		({ data }) => import.meta.env.DEV || !data.draft,
+	);
+	return posts.map((post) => ({
+		params: { slug: post.id },
+		props: { post },
+	}));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+
+const dateFmt = new Intl.DateTimeFormat("en-US", { dateStyle: "long" });
+---
+
+<BaseLayout title={`${post.data.title} — NicheHuntr`} description={post.data.description}>
+	<main class="mx-auto max-w-2xl px-6 py-16">
+		<a href="/blog/" class="text-sm text-muted-foreground transition-colors hover:text-primary">
+			← Back to blog
+		</a>
+
+		<article class="mt-8">
+			<header class="mb-8">
+				<time datetime={post.data.pubDate.toISOString()} class="text-sm text-muted-foreground">
+					{dateFmt.format(post.data.pubDate)}
+				</time>
+				<h1 class="mt-2 text-4xl font-bold tracking-tight">{post.data.title}</h1>
+			</header>
+
+			<div class="prose prose-neutral dark:prose-invert max-w-none">
+				<Content />
+			</div>
+		</article>
+	</main>
+</BaseLayout>
