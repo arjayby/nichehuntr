@@ -8,7 +8,7 @@ import { useState } from "react";
 import { ListingCard } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 
-export const Route = createFileRoute("/_auth/feed")({
+export const Route = createFileRoute("/_auth/_subscribed/feed")({
 	component: FeedPage,
 });
 

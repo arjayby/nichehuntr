@@ -21,10 +21,10 @@ import type * as model_deriveListings from "../model/deriveListings.js";
 import type * as model_embeddings from "../model/embeddings.js";
 import type * as model_enrichment from "../model/enrichment.js";
 import type * as model_listings from "../model/listings.js";
+import type * as model_subscription from "../model/subscription.js";
 import type * as model_validators from "../model/validators.js";
 import type * as model_youtube from "../model/youtube.js";
 import type * as polar from "../polar.js";
-import type * as privateData from "../privateData.js";
 import type * as seed from "../seed.js";
 
 import type {
@@ -47,10 +47,10 @@ declare const fullApi: ApiFromModules<{
   "model/embeddings": typeof model_embeddings;
   "model/enrichment": typeof model_enrichment;
   "model/listings": typeof model_listings;
+  "model/subscription": typeof model_subscription;
   "model/validators": typeof model_validators;
   "model/youtube": typeof model_youtube;
   polar: typeof polar;
-  privateData: typeof privateData;
   seed: typeof seed;
 }>;
 
