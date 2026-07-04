@@ -95,6 +95,25 @@ export default defineSchema({
 		enrichedAt: v.number(),
 	}).index("by_channel_and_form", ["channelId", "form"]),
 
+	// The Operator's private Watchlist: one row per (Operator, Channel, Form)
+	// triple (ADR-0004). Never a listing id — Listings are deleted/reinserted on
+	// recompute (ADR-0002), so entries re-derive live Listing data at read time.
+	// `operatorId` is the better-auth user id. Newest-first uses `_creationTime`.
+	watchlistEntries: defineTable({
+		operatorId: v.string(),
+		channelId: v.id("channels"),
+		form: formValidator,
+	})
+		// Point lookup for toggle/dedupe on the exact triple; its `operatorId`
+		// prefix also serves the per-operator list (ordered by the remaining
+		// columns, so the list query uses `by_operator` below instead).
+		.index("by_operator_and_channel_and_form", [
+			"operatorId",
+			"channelId",
+			"form",
+		])
+		.index("by_operator", ["operatorId"]),
+
 	// The snowball graph (CONTEXT.md): a directed edge means `toChannelId` surfaced
 	// as related/featured off `fromChannelId` during snowball discovery. Its purpose
 	// is to populate same-niche clusters so vector search has neighbors to find; its

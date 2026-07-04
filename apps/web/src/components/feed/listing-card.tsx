@@ -11,7 +11,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
-import { ExternalLink, Minus, TrendingUp, Users } from "lucide-react";
+import { Bookmark, ExternalLink, Minus, TrendingUp, Users } from "lucide-react";
 
 const compactViews = new Intl.NumberFormat("en", {
 	notation: "compact",
@@ -168,8 +168,17 @@ function SignalRationales({ card }: { card: FeedCard }) {
 	);
 }
 
+/** The form badge shared by Feed cards and Watchlist rows. */
+export function FormBadge({ form }: { form: FeedCard["form"] }) {
+	return (
+		<span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
+			{form}
+		</span>
+	);
+}
+
 /** Up to two initials for the avatar fallback, e.g. "AI Horror Shorts" → "AH". */
-function initials(title: string): string {
+export function initials(title: string): string {
 	return title
 		.split(/\s+/)
 		.filter(Boolean)
@@ -185,7 +194,15 @@ function channelUrl(channel: FeedCard["channel"]): string {
 		: `https://www.youtube.com/channel/${channel.ytId}`;
 }
 
-export function ListingCard({ card }: { card: FeedCard }) {
+export function ListingCard({
+	card,
+	saved,
+	onToggleSave,
+}: {
+	card: FeedCard;
+	saved: boolean;
+	onToggleSave: (card: FeedCard) => void;
+}) {
 	return (
 		<a
 			href={channelUrl(card.channel)}
@@ -216,9 +233,33 @@ export function ListingCard({ card }: { card: FeedCard }) {
 							) : null}
 						</div>
 						<div className="ml-auto flex flex-col items-end gap-1">
-							<span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
-								{card.form}
-							</span>
+							<div className="flex items-center gap-1.5">
+								<FormBadge form={card.form} />
+								{/* Toggles the Watchlist save; must never follow the card's
+								    YouTube link, so it swallows the click before the anchor. */}
+								<button
+									type="button"
+									aria-pressed={saved}
+									aria-label={
+										saved ? "Remove from Watchlist" : "Save to Watchlist"
+									}
+									title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+									onClick={(event) => {
+										event.preventDefault();
+										event.stopPropagation();
+										onToggleSave(card);
+									}}
+									className={`-m-1 rounded-md p-1 transition-colors ${
+										saved
+											? "text-primary"
+											: "text-muted-foreground hover:text-foreground"
+									}`}
+								>
+									<Bookmark
+										className={`size-4 ${saved ? "fill-current" : ""}`}
+									/>
+								</button>
+							</div>
 							<MomentumIndicator momentum={card.momentum} />
 						</div>
 					</div>

@@ -1,7 +1,6 @@
-/// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { setup as harnessSetup } from "../test/harness";
 import { api } from "./_generated/api";
 import { runDiscovery, runSnapshot } from "./ingest";
 import type { Stage } from "./model/deriveListings";
@@ -10,9 +9,7 @@ import type {
 	TrendingVideo,
 	YouTubeAdapter,
 } from "./model/youtube";
-import schema from "./schema";
 
-const modules = import.meta.glob("./**/*.ts");
 const DAY = 24 * 60 * 60 * 1000;
 const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
 
@@ -62,9 +59,15 @@ function titles(
 	return groups.flatMap((g) => g.cards).map((c) => c.channel.title);
 }
 
+/** A convex-test instance with a subscribed Operator able to read the Feed. */
+async function setup() {
+	const { t, operator: asUser } = await harnessSetup();
+	return { t, asUser };
+}
+
 describe("runDiscovery", () => {
 	it("turns a fetched channel into a Proven Listing visible in the Feed", async () => {
-		const t = convexTest(schema, modules);
+		const { t, asUser } = await setup();
 		const adapter = stubAdapter({
 			trending: longVideos("chan_proven", {
 				count: 5,
@@ -88,7 +91,6 @@ describe("runDiscovery", () => {
 			channelsRecomputed: 1,
 		});
 
-		const asUser = t.withIdentity({ subject: "u" });
 		const longTitles = titles(
 			await asUser.query(api.feed.feed, { form: "long" }),
 		);
@@ -106,7 +108,7 @@ describe("runDiscovery", () => {
 	});
 
 	it("does not surface a channel whose median misses the Proven threshold", async () => {
-		const t = convexTest(schema, modules);
+		const { t, asUser } = await setup();
 		const adapter = stubAdapter({
 			trending: longVideos("chan_weak", {
 				count: 5,
@@ -117,7 +119,6 @@ describe("runDiscovery", () => {
 
 		await t.action(async (ctx) => runDiscovery(ctx, adapter));
 
-		const asUser = t.withIdentity({ subject: "u" });
 		const longTitles = titles(
 			await asUser.query(api.feed.feed, { form: "long" }),
 		);
@@ -125,7 +126,7 @@ describe("runDiscovery", () => {
 	});
 
 	it("is idempotent — re-discovering patches rather than duplicating", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		const adapter = stubAdapter({
 			trending: longVideos("chan_dup", {
 				count: 5,
@@ -146,8 +147,7 @@ describe("runDiscovery", () => {
 	});
 
 	it("drops a channel from the Feed once newer weak uploads sink its median", async () => {
-		const t = convexTest(schema, modules);
-		const asUser = t.withIdentity({ subject: "u" });
+		const { t, asUser } = await setup();
 
 		// First pass: five strong, older uploads ⇒ Proven, in the Feed.
 		await t.action(async (ctx) =>
@@ -190,8 +190,7 @@ describe("runDiscovery", () => {
 
 describe("runSnapshot", () => {
 	it("re-samples tracked videos and refreshes the derived median", async () => {
-		const t = convexTest(schema, modules);
-		const asUser = t.withIdentity({ subject: "u" });
+		const { t, asUser } = await setup();
 
 		await t.action(async (ctx) =>
 			runDiscovery(
@@ -230,7 +229,7 @@ describe("runSnapshot", () => {
 	});
 
 	it("no-ops cleanly when nothing is tracked yet", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		const result = await t.action(async (ctx) =>
 			runSnapshot(ctx, stubAdapter({ statViews: 1 })),
 		);
@@ -249,8 +248,7 @@ describe("momentum drives live column placement", () => {
 		const t0 = Date.UTC(2026, 5, 1);
 		vi.setSystemTime(t0);
 
-		const t = convexTest(schema, modules);
-		const asUser = t.withIdentity({ subject: "u" });
+		const { t, asUser } = await setup();
 
 		/** Which lifecycle column the channel's card currently sits in. */
 		const columnOf = async (): Promise<Stage | undefined> => {

@@ -1,7 +1,6 @@
-/// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { type Operator, setup } from "../test/harness";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -14,9 +13,7 @@ import {
 } from "./model/embeddings";
 import { recomputeListingsForChannel } from "./model/listings";
 import type { RelatedChannels, YouTubeAdapter } from "./model/youtube";
-import schema from "./schema";
 
-const modules = import.meta.glob("./**/*.ts");
 const DAY = 24 * 60 * 60 * 1000;
 const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
 
@@ -103,12 +100,12 @@ function cardByTitle(groups: FeedGroup[], title: string): FeedCard | undefined {
 	return groups.flatMap((g) => g.cards).find((c) => c.channel.title === title);
 }
 
-const longFeed = (t: ReturnType<typeof convexTest>) =>
-	t.withIdentity({ subject: "u" }).query(api.feed.feed, { form: "long" });
+const longFeed = (operator: Operator) =>
+	operator.query(api.feed.feed, { form: "long" });
 
 describe("runSnowball", () => {
 	it("tracks related channels and records graph edges", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "seed_a", title: "Seed A" }),
 		);
@@ -138,7 +135,7 @@ describe("runSnowball", () => {
 	});
 
 	it("is idempotent — re-snowballing the same graph adds nothing", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "seed_b", title: "Seed B" }),
 		);
@@ -159,12 +156,12 @@ describe("runSnowball", () => {
 	});
 
 	it("feeds the snowball-density fallback before embeddings exist", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "seed_dense", title: "Seed Dense" }),
 		);
 		// On momentum alone it is Breaking Out.
-		expect(cardByTitle(await longFeed(t), "Seed Dense")?.stage).toBe(
+		expect(cardByTitle(await longFeed(operator), "Seed Dense")?.stage).toBe(
 			"breaking_out",
 		);
 
@@ -181,7 +178,7 @@ describe("runSnowball", () => {
 		];
 		await t.action(async (ctx) => runSnowball(ctx, snowballAdapter(related)));
 
-		const card = cardByTitle(await longFeed(t), "Seed Dense");
+		const card = cardByTitle(await longFeed(operator), "Seed Dense");
 		expect(card?.saturation).toBe(SATURATION_CROWDED);
 		expect(card?.stage).toBe("established");
 	});
@@ -189,7 +186,7 @@ describe("runSnowball", () => {
 
 describe("runEmbed — embeddings + Saturation", () => {
 	it("backfills an embedding of the index's width per channel", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "h_solo", title: "Horror Solo" }),
 		);
@@ -210,7 +207,7 @@ describe("runEmbed — embeddings + Saturation", () => {
 	});
 
 	it("sizes each niche by vector search and lets a crowded one dominate Stage", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		// A crowded niche (9 channels ⇒ 8 neighbors each = the crowded band) beside a
 		// sparse one (2 Finance channels ⇒ 1 neighbor each). All are proven with
 		// strong momentum, so only Saturation can move them out of Breaking Out.
@@ -232,13 +229,13 @@ describe("runEmbed — embeddings + Saturation", () => {
 		});
 
 		// Momentum alone would keep every one of them in Breaking Out.
-		expect(cardByTitle(await longFeed(t), "Horror 0")?.stage).toBe(
+		expect(cardByTitle(await longFeed(operator), "Horror 0")?.stage).toBe(
 			"breaking_out",
 		);
 
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
 
-		const groups = await longFeed(t);
+		const groups = await longFeed(operator);
 		const horror = cardByTitle(groups, "Horror 0");
 		expect(horror?.saturation).toBe(SATURATION_CROWDED); // 8 similar channels
 		expect(horror?.stage).toBe("established"); // saturation dominates momentum
@@ -249,14 +246,14 @@ describe("runEmbed — embeddings + Saturation", () => {
 	});
 
 	it("re-measures a channel as its niche fills in across ticks", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "h_first", title: "Horror First" }),
 		);
 
 		// First tick: it is alone in its niche ⇒ Saturation 0, still Breaking Out.
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
-		let card = cardByTitle(await longFeed(t), "Horror First");
+		let card = cardByTitle(await longFeed(operator), "Horror First");
 		expect(card?.saturation).toBe(0);
 		expect(card?.stage).toBe("breaking_out");
 
@@ -271,7 +268,7 @@ describe("runEmbed — embeddings + Saturation", () => {
 		});
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
 
-		card = cardByTitle(await longFeed(t), "Horror First");
+		card = cardByTitle(await longFeed(operator), "Horror First");
 		expect(card?.saturation).toBe(SATURATION_CROWDED);
 		expect(card?.stage).toBe("established");
 	});
