@@ -25,8 +25,16 @@ The implicit, inferred content space a channel occupies (e.g. "AI horror shorts"
 _Avoid_: Category, tag (as a required field), vertical.
 
 **Feed**:
-The single global, shared discovery surface — one canonical set of tracked Channels + Snapshots that every Operator sees. Momentum and saturation are computed once, globally. Per-Operator personalization (long/short filter, stage filter, later a watchlist) is only a _lens_ on the Feed, never a private dataset.
+The single global, shared discovery surface — one canonical set of tracked Channels + Snapshots that every Operator sees. Momentum and saturation are computed once, globally. Per-Operator personalization (long/short filter, stage filter, the [[Watchlist]]) is only a _lens_ on the Feed, never a private dataset.
 _Avoid_: Dashboard, my channels.
+
+**Watchlist**:
+The Operator's private, curated set of clone candidates, saved from Feed cards. A watchlist entry is an `(Operator, Channel, Form)` triple — channel-anchored but form-scoped, so the two faces of a straddling channel are two distinct entries, and entries survive Listing recomputes. A _lens_ on the [[Feed]]: entries point into the shared dataset and re-derive live Listing data at read time; nothing is copied or frozen.
+_Avoid_: Saved channels, favorites, bookmarks.
+
+**Folder**:
+The Operator's flat, private grouping inside the [[Watchlist]] — a named bucket expressing curation intent (e.g. "faceless", "next month"). No nesting; a watchlist entry sits in at most one Folder or at the root. Deleting a Folder returns its entries to the root — it never deletes them. Folders group; they do not rank — ordering within the Watchlist is automatic.
+_Avoid_: Tag, label, category, collection.
 
 ## Discovery pipeline
 
