@@ -26,6 +26,7 @@ import type * as model_validators from "../model/validators.js";
 import type * as model_youtube from "../model/youtube.js";
 import type * as polar from "../polar.js";
 import type * as seed from "../seed.js";
+import type * as watchlist from "../watchlist.js";
 
 import type {
   ApiFromModules,
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   "model/youtube": typeof model_youtube;
   polar: typeof polar;
   seed: typeof seed;
+  watchlist: typeof watchlist;
 }>;
 
 /**

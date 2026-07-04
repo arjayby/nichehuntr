@@ -1,15 +1,11 @@
-/// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { createGatedTest, setup } from "../test/harness";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { FeedCard, FeedGroup } from "./feed";
 import type { Form, Stage } from "./model/deriveListings";
-import schema from "./schema";
-
-const modules = import.meta.glob("./**/*.ts");
 
 async function addChannel(
 	ctx: MutationCtx,
@@ -59,7 +55,7 @@ function cardsForStage(groups: FeedGroup[], stage: Stage): FeedCard[] {
 
 describe("feed query", () => {
 	it("returns only proven listings, grouped into lifecycle columns", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) => {
 			const c1 = await addChannel(ctx, "Proven Emerging");
 			await addListing(ctx, {
@@ -86,9 +82,7 @@ describe("feed query", () => {
 			});
 		});
 
-		const groups = await t
-			.withIdentity({ subject: "u" })
-			.query(api.feed.feed, { form: "short" });
+		const groups = await operator.query(api.feed.feed, { form: "short" });
 
 		expect(
 			cardsForStage(groups, "emerging").map((c) => c.channel.title),
@@ -101,7 +95,7 @@ describe("feed query", () => {
 	});
 
 	it("sorts a column by clonability descending, keeping unscored listings last", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) => {
 			const scores: [string, number | null][] = [
 				["Mid", 50],
@@ -121,9 +115,7 @@ describe("feed query", () => {
 			}
 		});
 
-		const groups = await t
-			.withIdentity({ subject: "u" })
-			.query(api.feed.feed, { form: "long" });
+		const groups = await operator.query(api.feed.feed, { form: "long" });
 
 		expect(cardsForStage(groups, "emerging").map((c) => c.clonability)).toEqual(
 			[90, 50, 20, null],
@@ -131,7 +123,7 @@ describe("feed query", () => {
 	});
 
 	it("surfaces a straddling channel under both form filters", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) => {
 			const channelId = await addChannel(ctx, "Straddler");
 			await addListing(ctx, {
@@ -148,16 +140,15 @@ describe("feed query", () => {
 			});
 		});
 
-		const asUser = t.withIdentity({ subject: "u" });
-		const shortFeed = await asUser.query(api.feed.feed, { form: "short" });
-		const longFeed = await asUser.query(api.feed.feed, { form: "long" });
+		const shortFeed = await operator.query(api.feed.feed, { form: "short" });
+		const longFeed = await operator.query(api.feed.feed, { form: "long" });
 
 		expect(allTitles(shortFeed)).toContain("Straddler");
 		expect(allTitles(longFeed)).toContain("Straddler");
 	});
 
 	it("narrows to only the requested stages", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) => {
 			const a = await addChannel(ctx, "Em");
 			await addListing(ctx, {
@@ -175,9 +166,10 @@ describe("feed query", () => {
 			});
 		});
 
-		const groups = await t
-			.withIdentity({ subject: "u" })
-			.query(api.feed.feed, { form: "short", stages: ["breaking_out"] });
+		const groups = await operator.query(api.feed.feed, {
+			form: "short",
+			stages: ["breaking_out"],
+		});
 
 		expect(groups.map((g) => g.stage)).toEqual(["breaking_out"]);
 		expect(
@@ -186,7 +178,7 @@ describe("feed query", () => {
 	});
 
 	it("requires authentication", async () => {
-		const t = convexTest(schema, modules);
+		const t = createGatedTest();
 		await expect(t.query(api.feed.feed, { form: "short" })).rejects.toThrow(
 			/authenticated/i,
 		);

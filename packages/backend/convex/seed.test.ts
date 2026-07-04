@@ -1,11 +1,7 @@
-/// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { asSubscribedOperator, createGatedTest } from "../test/harness";
 import { api, internal } from "./_generated/api";
-import schema from "./schema";
-
-const modules = import.meta.glob("./**/*.ts");
 
 /** Titles of every card the feed returned, across all columns. */
 function titles(
@@ -16,7 +12,7 @@ function titles(
 
 describe("seed", () => {
 	it("drives the full path so the Feed renders Proven Listings", async () => {
-		const t = convexTest(schema, modules);
+		const t = createGatedTest();
 		const summary = await t.mutation(internal.seed.seed, {});
 
 		// AI Horror (short) + Deep Finance (long) + Faceless (short & long) = 4 proven.
@@ -24,7 +20,7 @@ describe("seed", () => {
 		// never a proven one.
 		expect(summary.provenListings).toBe(4);
 
-		const asUser = t.withIdentity({ subject: "u" });
+		const asUser = await asSubscribedOperator(t);
 		const shortTitles = titles(
 			await asUser.query(api.feed.feed, { form: "short" }),
 		);
@@ -42,7 +38,7 @@ describe("seed", () => {
 	});
 
 	it("is idempotent — re-running replaces rather than duplicates", async () => {
-		const t = convexTest(schema, modules);
+		const t = createGatedTest();
 		await t.mutation(internal.seed.seed, {});
 		const second = await t.mutation(internal.seed.seed, {});
 

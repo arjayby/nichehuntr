@@ -1,7 +1,6 @@
-/// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { type Operator, setup } from "../test/harness";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -13,9 +12,7 @@ import type {
 	Signals,
 } from "./model/clonability";
 import { recomputeListingsForChannel } from "./model/listings";
-import schema from "./schema";
 
-const modules = import.meta.glob("./**/*.ts");
 const DAY = 24 * 60 * 60 * 1000;
 const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
 
@@ -86,18 +83,18 @@ function cardByTitle(groups: FeedGroup[], title: string): FeedCard | undefined {
 	return groups.flatMap((g) => g.cards).find((c) => c.channel.title === title);
 }
 
-const longFeed = (t: ReturnType<typeof convexTest>) =>
-	t.withIdentity({ subject: "u" }).query(api.feed.feed, { form: "long" });
+const longFeed = (operator: Operator) =>
+	operator.query(api.feed.feed, { form: "long" });
 
 describe("runEnrich — Clonability scoring", () => {
 	it("rides a Clonability score and rationales onto the feed card", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "fin", title: "Deep Finance" }),
 		);
 
 		// Proven and Breaking Out, but no Clonability yet (graceful degradation).
-		const before = cardByTitle(await longFeed(t), "Deep Finance");
+		const before = cardByTitle(await longFeed(operator), "Deep Finance");
 		expect(before?.clonability).toBeNull();
 		expect(before?.signals).toBeNull();
 		expect(before?.stage).toBe("breaking_out");
@@ -106,7 +103,7 @@ describe("runEnrich — Clonability scoring", () => {
 		const result = await t.action((ctx) => runEnrich(ctx, adapter));
 		expect(result).toEqual({ enriched: 1, failed: 0 });
 
-		const after = cardByTitle(await longFeed(t), "Deep Finance");
+		const after = cardByTitle(await longFeed(operator), "Deep Finance");
 		expect(after?.clonability).toBe(60); // (80 + 40) / 2
 		expect(after?.signals?.enterprise_value?.rationale).toBe("high-CPM niche");
 		// Enrichment never gates and never moves Stage (ADR-0003).
@@ -114,19 +111,19 @@ describe("runEnrich — Clonability scoring", () => {
 	});
 
 	it("still renders a proven Listing that has never been enriched", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "raw", title: "Unenriched" }),
 		);
 
-		const card = cardByTitle(await longFeed(t), "Unenriched");
+		const card = cardByTitle(await longFeed(operator), "Unenriched");
 		expect(card).toBeDefined();
 		expect(card?.clonability).toBeNull();
 		expect(card?.signals).toBeNull();
 	});
 
 	it("passes the channel's thumbnails to the adapter", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "th", title: "Thumbs" }),
 		);
@@ -141,7 +138,7 @@ describe("runEnrich — Clonability scoring", () => {
 
 describe("runEnrich — caching & material change", () => {
 	it("caches results and re-runs only when inputs materially change", async () => {
-		const t = convexTest(schema, modules);
+		const { t } = await setup();
 		const channelId = await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "cache", title: "Cache Me" }),
 		);
@@ -176,19 +173,21 @@ describe("runEnrich — caching & material change", () => {
 	});
 
 	it("preserves Clonability across a later recompute (survives the clobber)", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "keep", title: "Keep Me" }),
 		);
 
 		const { adapter } = stubEnrichment(() => longSignals(90, 30));
 		await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(cardByTitle(await longFeed(t), "Keep Me")?.clonability).toBe(60);
+		expect(cardByTitle(await longFeed(operator), "Keep Me")?.clonability).toBe(
+			60,
+		);
 
 		// A later pipeline tick deletes and re-inserts this channel's Listings.
 		await t.run((ctx) => recomputeListingsForChannel(ctx, channelId));
 
-		const card = cardByTitle(await longFeed(t), "Keep Me");
+		const card = cardByTitle(await longFeed(operator), "Keep Me");
 		expect(card?.clonability).toBe(60); // re-applied from the cache, not lost
 		expect(card?.signals?.enterprise_value?.score).toBe(90);
 	});
@@ -196,7 +195,7 @@ describe("runEnrich — caching & material change", () => {
 
 describe("runEnrich — within-column ranking", () => {
 	it("sorts a Stage column by Clonability so the strongest clone target leads", async () => {
-		const t = convexTest(schema, modules);
+		const { t, operator } = await setup();
 		await t.run(async (ctx) => {
 			await addStrongChannel(ctx, { ytId: "lo", title: "Low Clone" });
 			await addStrongChannel(ctx, { ytId: "hi", title: "High Clone" });
@@ -209,7 +208,9 @@ describe("runEnrich — within-column ranking", () => {
 		);
 		await t.action((ctx) => runEnrich(ctx, adapter));
 
-		const column = (await longFeed(t)).find((g) => g.stage === "breaking_out");
+		const column = (await longFeed(operator)).find(
+			(g) => g.stage === "breaking_out",
+		);
 		const titles = column?.cards.map((c) => c.channel.title) ?? [];
 		expect(titles.indexOf("High Clone")).toBeLessThan(
 			titles.indexOf("Low Clone"),
