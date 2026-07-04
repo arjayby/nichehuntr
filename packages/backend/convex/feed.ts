@@ -5,6 +5,7 @@ import { query } from "./_generated/server";
 import type { Signals } from "./model/clonability";
 import type { Form, Stage } from "./model/deriveListings";
 import { formValidator, stageValidator } from "./model/validators";
+import { requireActiveSubscription } from "./polar";
 
 /** Canonical left-to-right column order — the momentum lifecycle (CONTEXT.md). */
 const STAGE_ORDER = [
@@ -53,7 +54,7 @@ function byClonabilityDesc(a: FeedCard, b: FeedCard): number {
 /**
  * The Feed: Proven Listings of the selected form, grouped into the lifecycle
  * columns and sorted by Clonability. The Feed is a shared, global surface, so
- * the form/stage args are only a lens — but it still requires sign-in.
+ * the form/stage args are only a lens — but it requires an active subscription.
  */
 export const feed = query({
 	args: {
@@ -61,10 +62,7 @@ export const feed = query({
 		stages: v.optional(v.array(stageValidator)),
 	},
 	handler: async (ctx, args): Promise<FeedGroup[]> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (identity === null) {
-			throw new Error("Not authenticated");
-		}
+		await requireActiveSubscription(ctx);
 
 		const stageSet = new Set<Stage>(
 			args.stages && args.stages.length > 0 ? args.stages : STAGE_ORDER,

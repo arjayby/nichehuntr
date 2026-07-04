@@ -13,7 +13,7 @@ export const Route = createFileRoute("/login")({
 	validateSearch: searchSchema,
 	beforeLoad: ({ context, search }) => {
 		if (context.isAuthenticated) {
-			throw redirect({ to: search.redirect ?? "/dashboard" });
+			throw redirect({ to: search.redirect ?? "/feed" });
 		}
 	},
 	head: () => ({
@@ -24,5 +24,5 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
 	const search = Route.useSearch();
-	return <SignInForm redirectTo={search.redirect ?? "/dashboard"} />;
+	return <SignInForm redirectTo={search.redirect ?? "/feed"} />;
 }
