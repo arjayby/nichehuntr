@@ -1,3 +1,15 @@
+import {
+	DndContext,
+	type DragEndEvent,
+	DragOverlay,
+	type DragStartEvent,
+	PointerSensor,
+	pointerWithin,
+	useDraggable,
+	useDroppable,
+	useSensor,
+	useSensors,
+} from "@dnd-kit/core";
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import type {
@@ -54,6 +66,15 @@ import { cn } from "@/lib/utils";
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
 const SPLIT_LAYOUT_ID = "nichehuntr.watchlist-drawer.split";
 const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
+
+/** The un-file target: dropping an entry here clears its Folder (back to root). */
+const ROOT_DROPPABLE_ID = "watchlist-root";
+
+/** Namespaced droppable id for a Folder, so drag-end can tell folders from the
+ * root without colliding with the raw folder id. */
+function folderDroppableId(folderId: Id<"watchlistFolders">): string {
+	return `folder:${folderId}`;
+}
 
 /** Two entries share one identity when they point at the same (channel, form)
  * pair — the entry identity of ADR-0004. */
@@ -135,6 +156,25 @@ function useCollapsedFolders() {
 	}, []);
 
 	return { collapsed, toggle };
+}
+
+/**
+ * Whether the primary pointer is fine (a mouse/trackpad). Drag-and-drop filing
+ * is gated on this: on coarse (touch) pointers dragging would fight the Sheet's
+ * scroll, so there the `⋯` menu is the filing path (issue #22). SSR-safe —
+ * defaults to false and resolves after mount, matching the drawer's other
+ * localStorage-style hooks.
+ */
+function useIsFinePointer(): boolean {
+	const [fine, setFine] = useState(false);
+	useEffect(() => {
+		const query = window.matchMedia("(pointer: fine)");
+		setFine(query.matches);
+		const onChange = () => setFine(query.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return fine;
 }
 
 /** The `⋯` icon-trigger shared by entry and Folder menus. On mouse (fine
@@ -257,6 +297,7 @@ function WatchlistRow({
 	entry,
 	selected,
 	folders,
+	draggable,
 	onSelect,
 	onMove,
 	onNewFolderFor,
@@ -265,6 +306,8 @@ function WatchlistRow({
 	entry: WatchlistEntry;
 	selected: boolean;
 	folders: WatchlistFolderGroup[];
+	/** When true the row can be dragged to file it (fine pointers only). */
+	draggable: boolean;
 	onSelect: (selection: WatchlistSelection) => void;
 	onMove: (
 		entry: WatchlistEntry,
@@ -273,15 +316,31 @@ function WatchlistRow({
 	onNewFolderFor: (entry: WatchlistEntry) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
+	// Whole-row draggable. Listeners are spread only on fine pointers; the
+	// PointerSensor's distance activation (see WatchlistBody) means a click still
+	// selects and only a real drag files. `attributes` are deliberately left off
+	// so the row keeps a single tab stop (its select button) and the `⋯` menu
+	// stays the keyboard/touch filing path.
+	const { setNodeRef, listeners, isDragging } = useDraggable({
+		id: entry.entryId,
+		disabled: !draggable,
+	});
 	return (
 		<li>
 			<div
+				ref={setNodeRef}
+				{...(draggable ? listeners : {})}
 				className={cn(
 					"group flex items-center gap-1 rounded-2xl border border-border pr-1 transition-colors hover:bg-accent",
 					selected && "border-foreground/30 bg-accent",
 					// Off the Feed: muted but still selectable — the detail pane
 					// explains why (ADR-0004: the entry outlives the Listing).
 					!entry.onFeed && "opacity-60",
+					// The DragOverlay stands in for the dragged row; fade the source.
+					isDragging && "opacity-40",
+					// No `touch-none`: dragging is gated to fine pointers, so the only
+					// effect would be to block touch-scroll over rows on hybrid devices.
+					draggable && "cursor-grab active:cursor-grabbing",
 				)}
 			>
 				<button
@@ -327,6 +386,7 @@ function FolderGroup({
 	collapsed,
 	selection,
 	folders,
+	dndEnabled,
 	onToggleCollapse,
 	onRename,
 	onDelete,
@@ -339,6 +399,8 @@ function FolderGroup({
 	collapsed: boolean;
 	selection: WatchlistSelection | null;
 	folders: WatchlistFolderGroup[];
+	/** Whether drag-and-drop filing is active (fine pointers only). */
+	dndEnabled: boolean;
 	onToggleCollapse: (folderId: string) => void;
 	onRename: (folderId: Id<"watchlistFolders">, name: string) => void;
 	onDelete: (folderId: Id<"watchlistFolders">) => void;
@@ -351,9 +413,22 @@ function FolderGroup({
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
 	const [renaming, setRenaming] = useState(false);
+	// The whole Folder (header + entries) is one drop target, so even a collapsed
+	// or empty Folder still accepts a drop on its header.
+	const { setNodeRef, isOver } = useDroppable({
+		id: folderDroppableId(folder.folderId),
+		disabled: !dndEnabled,
+	});
 
 	return (
-		<div className="flex flex-col gap-2">
+		<div
+			ref={setNodeRef}
+			className={cn(
+				"flex flex-col gap-2 rounded-2xl transition-colors",
+				// Ring in while a drag hovers, so the drop target is unambiguous.
+				isOver && "bg-accent/60 ring-2 ring-foreground/30 ring-inset",
+			)}
+		>
 			<div className="group flex items-center gap-1">
 				{renaming ? (
 					<div className="flex-1 pl-1">
@@ -421,6 +496,7 @@ function FolderGroup({
 							entry={entry}
 							selected={sameSelection(selection, entry)}
 							folders={folders}
+							draggable={dndEnabled}
 							onSelect={onSelect}
 							onMove={onMove}
 							onNewFolderFor={onNewFolderFor}
@@ -435,6 +511,84 @@ function FolderGroup({
 
 /** Filing a new Folder around a specific entry, or `null` to just create one. */
 type NewFolderTarget = { entryId: Id<"watchlistEntries"> | null };
+
+/**
+ * The root drop target: dropping an entry here un-files it (back to the root).
+ * The root entries live inside it, so their own area is the un-file zone; when
+ * the root is empty it renders a dashed placeholder while a drag is in flight so
+ * there is still somewhere to drop.
+ */
+function RootDropZone({
+	dndEnabled,
+	dragging,
+	children,
+}: {
+	dndEnabled: boolean;
+	dragging: boolean;
+	children: React.ReactNode;
+}) {
+	const { setNodeRef, isOver } = useDroppable({
+		id: ROOT_DROPPABLE_ID,
+		disabled: !dndEnabled,
+	});
+	const hasChildren = children !== null;
+	return (
+		<div
+			ref={setNodeRef}
+			className={cn(
+				"rounded-2xl transition-colors",
+				isOver && "bg-accent/60 ring-2 ring-foreground/30 ring-inset",
+			)}
+		>
+			{hasChildren ? (
+				children
+			) : dragging ? (
+				<p className="rounded-2xl border border-border border-dashed px-4 py-6 text-center text-muted-foreground text-xs">
+					Drop here to remove from a folder
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+/** The compact card that follows the cursor mid-drag — a chrome-free echo of the
+ * row so the Operator sees exactly what they're filing. */
+function DragPreviewCard({ entry }: { entry: WatchlistEntry }) {
+	return (
+		<div className="flex items-center gap-3 rounded-2xl border border-foreground/30 bg-background px-3 py-2 shadow-lg">
+			{entry.channel.avatarUrl ? (
+				<img
+					src={entry.channel.avatarUrl}
+					alt=""
+					className="size-8 shrink-0 rounded-full object-cover"
+				/>
+			) : (
+				<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
+					{initials(entry.channel.title)}
+				</div>
+			)}
+			<span className="min-w-0 flex-1 truncate font-medium text-sm">
+				{entry.channel.title}
+			</span>
+			<FormBadge form={entry.form} />
+		</div>
+	);
+}
+
+/** Flatten a Watchlist's entries (folders + root) to find one by its id — used
+ * on drag start to resolve the dragged row and on drag end to skip no-op moves. */
+function findEntry(
+	list: WatchlistList,
+	entryId: Id<"watchlistEntries">,
+): WatchlistEntry | undefined {
+	for (const folder of list.folders) {
+		const hit = folder.entries.find((entry) => entry.entryId === entryId);
+		if (hit !== undefined) {
+			return hit;
+		}
+	}
+	return list.root.find((entry) => entry.entryId === entryId);
+}
 
 /**
  * The drawer's list section: the Operator's whole Watchlist grouped into
@@ -459,6 +613,15 @@ function WatchlistBody({
 	const setEntryFolder = useMutation(api.watchlist.setEntryFolder);
 	const { collapsed, toggle: toggleCollapse } = useCollapsedFolders();
 	const [newFolder, setNewFolder] = useState<NewFolderTarget | null>(null);
+	// Drag-and-drop filing runs on fine pointers only (see useIsFinePointer);
+	// touch keeps the Sheet scrollable and files via the `⋯` menu.
+	const dndEnabled = useIsFinePointer();
+	const [activeEntry, setActiveEntry] = useState<WatchlistEntry | null>(null);
+	// A distance threshold lets a plain click still select a row and only a real
+	// drag (>6px) begin filing — no long-press, no drag handle needed.
+	const sensors = useSensors(
+		useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+	);
 
 	const handleCreateFolder = (name: string, target: NewFolderTarget) => {
 		setNewFolder(null);
@@ -492,6 +655,36 @@ function WatchlistBody({
 	const openNewFolderFor = (entry: WatchlistEntry) =>
 		setNewFolder({ entryId: entry.entryId });
 
+	const handleDragStart = (event: DragStartEvent) => {
+		if (list === undefined) {
+			return;
+		}
+		setActiveEntry(
+			findEntry(list, event.active.id as Id<"watchlistEntries">) ?? null,
+		);
+	};
+	const handleDragEnd = (event: DragEndEvent) => {
+		setActiveEntry(null);
+		const { active, over } = event;
+		if (list === undefined || over === null) {
+			return;
+		}
+		const entry = findEntry(list, active.id as Id<"watchlistEntries">);
+		if (entry === undefined) {
+			return;
+		}
+		// Root un-files; a folder droppable's namespaced id carries the target.
+		const target: Id<"watchlistFolders"> | null =
+			over.id === ROOT_DROPPABLE_ID
+				? null
+				: (String(over.id).slice("folder:".length) as Id<"watchlistFolders">);
+		// Dropping back where it already sits is a no-op — skip the mutation.
+		if ((entry.folderId ?? null) === target) {
+			return;
+		}
+		handleMove(entry, target);
+	};
+
 	if (list === undefined) {
 		return <Loader />;
 	}
@@ -500,68 +693,90 @@ function WatchlistBody({
 	const isEmpty = folders.length === 0 && root.length === 0;
 
 	return (
-		<div className="flex flex-col gap-2">
-			<div className="flex justify-end">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="h-7 gap-1 px-2 text-muted-foreground text-xs"
-					onClick={() => setNewFolder({ entryId: null })}
-				>
-					<FolderPlus className="size-3.5" /> New folder
-				</Button>
+		<DndContext
+			sensors={sensors}
+			// Resolve the drop by where the cursor is, not by rect overlap — filing
+			// should land the entry in the Folder the Operator points at.
+			collisionDetection={pointerWithin}
+			onDragStart={handleDragStart}
+			onDragEnd={handleDragEnd}
+			onDragCancel={() => setActiveEntry(null)}
+		>
+			<div className="flex flex-col gap-2">
+				<div className="flex justify-end">
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-7 gap-1 px-2 text-muted-foreground text-xs"
+						onClick={() => setNewFolder({ entryId: null })}
+					>
+						<FolderPlus className="size-3.5" /> New folder
+					</Button>
+				</div>
+
+				{newFolder !== null ? (
+					<FolderNameInput
+						placeholder="Folder name"
+						onSubmit={(name) => handleCreateFolder(name, newFolder)}
+						onCancel={() => setNewFolder(null)}
+					/>
+				) : null}
+
+				{folders.map((folder) => (
+					<FolderGroup
+						key={folder.folderId}
+						folder={folder}
+						collapsed={collapsed.has(folder.folderId)}
+						selection={selection}
+						folders={folders}
+						dndEnabled={dndEnabled}
+						onToggleCollapse={toggleCollapse}
+						onRename={handleRename}
+						onDelete={handleDelete}
+						onSelect={onSelect}
+						onMove={handleMove}
+						onNewFolderFor={openNewFolderFor}
+						onRemove={onRemove}
+					/>
+				))}
+
+				{/* Rendered whenever there are root entries, and — so an un-file has a
+				    target — also while a drag is in flight even if the root is empty. */}
+				{root.length > 0 || activeEntry !== null ? (
+					<RootDropZone dndEnabled={dndEnabled} dragging={activeEntry !== null}>
+						{root.length > 0 ? (
+							<ul className="flex flex-col gap-2">
+								{root.map((entry) => (
+									<WatchlistRow
+										key={entry.entryId}
+										entry={entry}
+										selected={sameSelection(selection, entry)}
+										folders={folders}
+										draggable={dndEnabled}
+										onSelect={onSelect}
+										onMove={handleMove}
+										onNewFolderFor={openNewFolderFor}
+										onRemove={onRemove}
+									/>
+								))}
+							</ul>
+						) : null}
+					</RootDropZone>
+				) : null}
+
+				{isEmpty ? (
+					<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
+						Your Watchlist is empty. Save a clone candidate with the{" "}
+						<Bookmark className="inline size-3 align-[-2px]" aria-hidden />{" "}
+						bookmark on a Feed card.
+					</p>
+				) : null}
 			</div>
 
-			{newFolder !== null ? (
-				<FolderNameInput
-					placeholder="Folder name"
-					onSubmit={(name) => handleCreateFolder(name, newFolder)}
-					onCancel={() => setNewFolder(null)}
-				/>
-			) : null}
-
-			{folders.map((folder) => (
-				<FolderGroup
-					key={folder.folderId}
-					folder={folder}
-					collapsed={collapsed.has(folder.folderId)}
-					selection={selection}
-					folders={folders}
-					onToggleCollapse={toggleCollapse}
-					onRename={handleRename}
-					onDelete={handleDelete}
-					onSelect={onSelect}
-					onMove={handleMove}
-					onNewFolderFor={openNewFolderFor}
-					onRemove={onRemove}
-				/>
-			))}
-
-			{root.length > 0 ? (
-				<ul className="flex flex-col gap-2">
-					{root.map((entry) => (
-						<WatchlistRow
-							key={entry.entryId}
-							entry={entry}
-							selected={sameSelection(selection, entry)}
-							folders={folders}
-							onSelect={onSelect}
-							onMove={handleMove}
-							onNewFolderFor={openNewFolderFor}
-							onRemove={onRemove}
-						/>
-					))}
-				</ul>
-			) : null}
-
-			{isEmpty ? (
-				<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
-					Your Watchlist is empty. Save a clone candidate with the{" "}
-					<Bookmark className="inline size-3 align-[-2px]" aria-hidden />{" "}
-					bookmark on a Feed card.
-				</p>
-			) : null}
-		</div>
+			<DragOverlay dropAnimation={null}>
+				{activeEntry !== null ? <DragPreviewCard entry={activeEntry} /> : null}
+			</DragOverlay>
+		</DndContext>
 	);
 }
 
