@@ -19,34 +19,15 @@ import type {
 	WatchlistSelection,
 } from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuSub,
-	DropdownMenuSubContent,
-	DropdownMenuSubTrigger,
-	DropdownMenuTrigger,
-} from "@nichehuntr/ui/components/dropdown-menu";
 import { Input } from "@nichehuntr/ui/components/input";
-import {
-	browserLayoutStorage,
-	ResizableHandle,
-	ResizablePanel,
-	ResizablePanelGroup,
-	useDefaultLayout,
-} from "@nichehuntr/ui/components/resizable";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	Bookmark,
 	BookmarkX,
 	ChevronDown,
 	ChevronRight,
-	Folder,
-	FolderInput,
 	FolderPlus,
-	MoreHorizontal,
+	GripVertical,
 	PanelRightClose,
 	Pencil,
 	Trash2,
@@ -57,14 +38,9 @@ import { toast } from "sonner";
 
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
-import {
-	DetailHint,
-	WatchlistDetailPane,
-} from "@/components/watchlist/watchlist-detail";
 import { cn } from "@/lib/utils";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
-const SPLIT_LAYOUT_ID = "nichehuntr.watchlist-drawer.split";
 const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
 
 /** The un-file target: dropping an entry here clears its Folder (back to root). */
@@ -161,7 +137,8 @@ function useCollapsedFolders() {
 /**
  * Whether the primary pointer is fine (a mouse/trackpad). Drag-and-drop filing
  * is gated on this: on coarse (touch) pointers dragging would fight the Sheet's
- * scroll, so there the `⋯` menu is the filing path (issue #22). SSR-safe —
+ * scroll, so filing into a Folder is a mouse-only gesture — touch has no filing
+ * path at all, only remove / Folder-manage. Also gates the drag grip. SSR-safe —
  * defaults to false and resolves after mount, matching the drawer's other
  * localStorage-style hooks.
  */
@@ -177,12 +154,22 @@ function useIsFinePointer(): boolean {
 	return fine;
 }
 
-/** The `⋯` icon-trigger shared by entry and Folder menus. On mouse (fine
- * pointer) devices it stays quiet at rest and reveals on hover/focus/open; on
- * touch (coarse pointer) there is no hover, so it is always visible or the menu
- * would be unreachable in the mobile sheet. */
-const MENU_TRIGGER_CLASS =
-	"size-7 shrink-0 text-muted-foreground opacity-100 transition-opacity data-[popup-open]:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100";
+/** A trailing action icon (remove an entry, rename / delete a Folder) that stays
+ * folded away and reveals on hover or keyboard focus. On mouse (fine pointer)
+ * devices it is width-collapsed at rest and expands in from the right — so the
+ * metadata beside it (a Form badge or the entry count) slides left to make room.
+ * On touch (coarse pointer) there is no hover, so it stays permanently visible;
+ * filing an entry into a Folder is mouse-only, but remove / rename / delete must
+ * still be reachable there. */
+function revealActionClass(extra?: string): string {
+	return cn(
+		"flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full text-muted-foreground transition-all",
+		"pointer-fine:w-0 opacity-100 pointer-fine:opacity-0",
+		"pointer-fine:group-hover:w-7 pointer-fine:group-hover:opacity-100",
+		"pointer-fine:group-focus-within:w-7 pointer-fine:group-focus-within:opacity-100",
+		extra,
+	);
+}
 
 /** An inline text field for naming or renaming a Folder: Enter commits a
  * non-empty name, Escape or blur cancels. Autofocused so it's type-ready. */
@@ -223,104 +210,26 @@ function FolderNameInput({
 	);
 }
 
-/** The per-entry `⋯` menu: file into a Folder / back to root / a new Folder, or
- * remove from the Watchlist (identical to toggling the card's bookmark off). */
-function EntryMenu({
-	entry,
-	folders,
-	onMove,
-	onNewFolderFor,
-	onRemove,
-}: {
-	entry: WatchlistEntry;
-	folders: WatchlistFolderGroup[];
-	onMove: (
-		entry: WatchlistEntry,
-		folderId: Id<"watchlistFolders"> | null,
-	) => void;
-	onNewFolderFor: (entry: WatchlistEntry) => void;
-	onRemove: (entry: WatchlistEntry) => void;
-}) {
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger
-				render={
-					<Button
-						variant="ghost"
-						size="icon"
-						className={MENU_TRIGGER_CLASS}
-						aria-label={`Actions for ${entry.channel.title}`}
-					/>
-				}
-			>
-				<MoreHorizontal className="size-4" />
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end">
-				<DropdownMenuSub>
-					<DropdownMenuSubTrigger>
-						<FolderInput /> Move to folder
-					</DropdownMenuSubTrigger>
-					<DropdownMenuSubContent>
-						{entry.folderId !== null ? (
-							<>
-								<DropdownMenuItem onClick={() => onMove(entry, null)}>
-									Move to root
-								</DropdownMenuItem>
-								<DropdownMenuSeparator />
-							</>
-						) : null}
-						{folders.map((folder) => (
-							<DropdownMenuItem
-								key={folder.folderId}
-								disabled={folder.folderId === entry.folderId}
-								onClick={() => onMove(entry, folder.folderId)}
-							>
-								<Folder /> <span className="truncate">{folder.name}</span>
-							</DropdownMenuItem>
-						))}
-						{folders.length > 0 ? <DropdownMenuSeparator /> : null}
-						<DropdownMenuItem onClick={() => onNewFolderFor(entry)}>
-							<FolderPlus /> New folder…
-						</DropdownMenuItem>
-					</DropdownMenuSubContent>
-				</DropdownMenuSub>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem variant="destructive" onClick={() => onRemove(entry)}>
-					<BookmarkX /> Remove from watchlist
-				</DropdownMenuItem>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
 function WatchlistRow({
 	entry,
 	selected,
-	folders,
 	draggable,
 	onSelect,
-	onMove,
-	onNewFolderFor,
 	onRemove,
 }: {
 	entry: WatchlistEntry;
 	selected: boolean;
-	folders: WatchlistFolderGroup[];
 	/** When true the row can be dragged to file it (fine pointers only). */
 	draggable: boolean;
 	onSelect: (selection: WatchlistSelection) => void;
-	onMove: (
-		entry: WatchlistEntry,
-		folderId: Id<"watchlistFolders"> | null,
-	) => void;
-	onNewFolderFor: (entry: WatchlistEntry) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
 	// Whole-row draggable. Listeners are spread only on fine pointers; the
 	// PointerSensor's distance activation (see WatchlistBody) means a click still
 	// selects and only a real drag files. `attributes` are deliberately left off
-	// so the row keeps a single tab stop (its select button) and the `⋯` menu
-	// stays the keyboard/touch filing path.
+	// so the row keeps its content tab stops (select + remove) rather than gaining
+	// a drag one — dragging is a mouse gesture, not a keyboard path. Removing the
+	// old `⋯` menu was deliberate (drag replaces it); don't restore it for touch.
 	const { setNodeRef, listeners, isDragging } = useDraggable({
 		id: entry.entryId,
 		disabled: !draggable,
@@ -331,7 +240,7 @@ function WatchlistRow({
 				ref={setNodeRef}
 				{...(draggable ? listeners : {})}
 				className={cn(
-					"group flex items-center gap-1 rounded-2xl border border-border pr-1 transition-colors hover:bg-accent",
+					"group flex items-center gap-1 rounded-2xl border border-border pr-1 pl-1 transition-colors hover:bg-accent",
 					selected && "border-foreground/30 bg-accent",
 					// Off the Feed: muted but still selectable — the detail pane
 					// explains why (ADR-0004: the entry outlives the Listing).
@@ -343,13 +252,24 @@ function WatchlistRow({
 					draggable && "cursor-grab active:cursor-grabbing",
 				)}
 			>
+				{/* Drag affordance: an always-visible grip in reserved width, so it
+				    reads as draggable at a glance. Only rendered when dragging is
+				    enabled (fine pointers), so touch rows stay flat. */}
+				{draggable ? (
+					<span
+						aria-hidden
+						className="flex w-4 shrink-0 justify-center text-muted-foreground/60"
+					>
+						<GripVertical className="size-4" />
+					</span>
+				) : null}
 				<button
 					type="button"
 					aria-current={selected}
 					onClick={() =>
 						onSelect({ channelId: entry.channelId, form: entry.form })
 					}
-					className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
+					className="flex min-w-0 flex-1 items-center gap-3 px-1 py-2 text-left"
 				>
 					{entry.channel.avatarUrl ? (
 						<img
@@ -365,60 +285,70 @@ function WatchlistRow({
 					<span className="min-w-0 flex-1 truncate font-medium text-sm">
 						{entry.channel.title}
 					</span>
-					<FormBadge form={entry.form} />
 				</button>
-				<EntryMenu
-					entry={entry}
-					folders={folders}
-					onMove={onMove}
-					onNewFolderFor={onNewFolderFor}
-					onRemove={onRemove}
-				/>
+				{/* Form badge + remove share the trailing slot: at rest the badge sits
+				    at the end; on hover/focus the remove button expands in from the
+				    right and the badge slides left to make room (revealActionClass). */}
+				<div className="flex shrink-0 items-center gap-1">
+					<FormBadge form={entry.form} />
+					<button
+						type="button"
+						onClick={() => onRemove(entry)}
+						aria-label={`Remove ${entry.channel.title} from watchlist`}
+						className={revealActionClass("hover:text-destructive")}
+					>
+						<BookmarkX className="size-4" />
+					</button>
+				</div>
 			</div>
 		</li>
 	);
 }
 
-/** A Folder: a collapsible header (chevron + name + count + `⋯` rename/delete)
- * over its entries, newest-first. Collapsing hides the entries only. */
+/** A Folder: a collapsible header (chevron + name + count, with rename/delete
+ * icons that reveal on hover) over its entries, newest-first. Collapsing hides
+ * the entries only. */
 function FolderGroup({
 	folder,
 	collapsed,
 	selection,
-	folders,
 	dndEnabled,
 	onToggleCollapse,
 	onRename,
 	onDelete,
 	onSelect,
-	onMove,
-	onNewFolderFor,
 	onRemove,
 }: {
 	folder: WatchlistFolderGroup;
 	collapsed: boolean;
 	selection: WatchlistSelection | null;
-	folders: WatchlistFolderGroup[];
 	/** Whether drag-and-drop filing is active (fine pointers only). */
 	dndEnabled: boolean;
 	onToggleCollapse: (folderId: string) => void;
 	onRename: (folderId: Id<"watchlistFolders">, name: string) => void;
 	onDelete: (folderId: Id<"watchlistFolders">) => void;
 	onSelect: (selection: WatchlistSelection) => void;
-	onMove: (
-		entry: WatchlistEntry,
-		folderId: Id<"watchlistFolders"> | null,
-	) => void;
-	onNewFolderFor: (entry: WatchlistEntry) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
 	const [renaming, setRenaming] = useState(false);
+	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	// The whole Folder (header + entries) is one drop target, so even a collapsed
 	// or empty Folder still accepts a drop on its header.
 	const { setNodeRef, isOver } = useDroppable({
 		id: folderDroppableId(folder.folderId),
 		disabled: !dndEnabled,
 	});
+	const entryCount = folder.entries.length;
+	// One-click delete goes straight through for an empty Folder; a populated one
+	// asks first, since the grouping disappears in a single misclick. The entries
+	// themselves are never lost — deleting reparents them to the root (Slice 3).
+	const handleDeleteClick = () => {
+		if (entryCount === 0) {
+			onDelete(folder.folderId);
+		} else {
+			setConfirmingDelete(true);
+		}
+	};
 
 	return (
 		<div
@@ -429,7 +359,7 @@ function FolderGroup({
 				isOver && "bg-accent/60 ring-2 ring-foreground/30 ring-inset",
 			)}
 		>
-			<div className="group flex items-center gap-1">
+			<div className="group flex items-center gap-1 pr-1">
 				{renaming ? (
 					<div className="flex-1 pl-1">
 						<FolderNameInput
@@ -442,64 +372,90 @@ function FolderGroup({
 							onCancel={() => setRenaming(false)}
 						/>
 					</div>
-				) : (
-					<button
-						type="button"
-						aria-expanded={!collapsed}
-						onClick={() => onToggleCollapse(folder.folderId)}
-						className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
-					>
-						{collapsed ? (
-							<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-						) : (
-							<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-						)}
-						<span className="min-w-0 flex-1 truncate font-medium text-sm">
-							{folder.name}
+				) : confirmingDelete ? (
+					// Inline confirm in the header, mirroring the rename input — no modal.
+					// Two columns: the message wraps in a min-w-0 column so the actions
+					// stay pinned to the right and never push off the narrow drawer.
+					<div className="flex min-w-0 flex-1 items-center gap-2 py-1 pr-1 pl-2">
+						<span className="min-w-0 flex-1 text-muted-foreground text-xs">
+							Delete folder? {entryCount}{" "}
+							{entryCount === 1 ? "entry moves" : "entries move"} to root.
 						</span>
-						<span className="text-muted-foreground text-xs tabular-nums">
-							{folder.entries.length}
-						</span>
-					</button>
-				)}
-				<DropdownMenu>
-					<DropdownMenuTrigger
-						render={
+						<div className="flex shrink-0 items-center gap-1">
+							<Button
+								variant="destructive"
+								size="sm"
+								className="h-7 px-2 text-xs"
+								onClick={() => {
+									setConfirmingDelete(false);
+									onDelete(folder.folderId);
+								}}
+							>
+								Delete
+							</Button>
 							<Button
 								variant="ghost"
-								size="icon"
-								className={MENU_TRIGGER_CLASS}
-								aria-label={`Folder actions for ${folder.name}`}
-							/>
-						}
-					>
-						<MoreHorizontal className="size-4" />
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end">
-						<DropdownMenuItem onClick={() => setRenaming(true)}>
-							<Pencil /> Rename
-						</DropdownMenuItem>
-						<DropdownMenuItem
-							variant="destructive"
-							onClick={() => onDelete(folder.folderId)}
+								size="sm"
+								className="h-7 px-2 text-xs"
+								onClick={() => setConfirmingDelete(false)}
+							>
+								Cancel
+							</Button>
+						</div>
+					</div>
+				) : (
+					<>
+						<button
+							type="button"
+							aria-expanded={!collapsed}
+							onClick={() => onToggleCollapse(folder.folderId)}
+							className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
 						>
-							<Trash2 /> Delete folder
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
+							{collapsed ? (
+								<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+							) : (
+								<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+							)}
+							<span className="min-w-0 flex-1 truncate font-medium text-sm">
+								{folder.name}
+							</span>
+							<span className="text-muted-foreground text-xs tabular-nums">
+								{entryCount}
+							</span>
+						</button>
+						{/* Rename / delete reveal on hover or keyboard focus; the count
+						    above slides left as they expand in (revealActionClass). */}
+						<div className="flex shrink-0 items-center gap-1">
+							<button
+								type="button"
+								onClick={() => setRenaming(true)}
+								aria-label={`Rename folder ${folder.name}`}
+								className={revealActionClass("hover:text-foreground")}
+							>
+								<Pencil className="size-4" />
+							</button>
+							<button
+								type="button"
+								onClick={handleDeleteClick}
+								aria-label={`Delete folder ${folder.name}`}
+								className={revealActionClass("hover:text-destructive")}
+							>
+								<Trash2 className="size-4" />
+							</button>
+						</div>
+					</>
+				)}
 			</div>
-			{!collapsed && folder.entries.length > 0 ? (
-				<ul className="flex flex-col gap-2 pl-2">
+			{!collapsed && entryCount > 0 ? (
+				// Extra left indent nests the entries under their Folder.
+				<ul className="flex flex-col gap-2 pl-4">
 					{folder.entries.map((entry) => (
 						<WatchlistRow
 							key={entry.entryId}
 							entry={entry}
 							selected={sameSelection(selection, entry)}
-							folders={folders}
 							draggable={dndEnabled}
 							onSelect={onSelect}
-							onMove={onMove}
-							onNewFolderFor={onNewFolderFor}
 							onRemove={onRemove}
 						/>
 					))}
@@ -508,9 +464,6 @@ function FolderGroup({
 		</div>
 	);
 }
-
-/** Filing a new Folder around a specific entry, or `null` to just create one. */
-type NewFolderTarget = { entryId: Id<"watchlistEntries"> | null };
 
 /**
  * The root drop target: dropping an entry here un-files it (back to the root).
@@ -612,7 +565,7 @@ function WatchlistBody({
 	const deleteFolder = useMutation(api.watchlist.deleteFolder);
 	const setEntryFolder = useMutation(api.watchlist.setEntryFolder);
 	const { collapsed, toggle: toggleCollapse } = useCollapsedFolders();
-	const [newFolder, setNewFolder] = useState<NewFolderTarget | null>(null);
+	const [newFolder, setNewFolder] = useState(false);
 	// Drag-and-drop filing runs on fine pointers only (see useIsFinePointer);
 	// touch keeps the Sheet scrollable and files via the `⋯` menu.
 	const dndEnabled = useIsFinePointer();
@@ -623,16 +576,11 @@ function WatchlistBody({
 		useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
 	);
 
-	const handleCreateFolder = (name: string, target: NewFolderTarget) => {
-		setNewFolder(null);
-		createFolder({ name })
-			.then(({ folderId }) =>
-				// "New folder…" from an entry files it into the folder in one motion.
-				target.entryId !== null
-					? setEntryFolder({ entryId: target.entryId, folderId })
-					: undefined,
-			)
-			.catch(() => toast.error("Could not create the folder."));
+	const handleCreateFolder = (name: string) => {
+		setNewFolder(false);
+		createFolder({ name }).catch(() =>
+			toast.error("Could not create the folder."),
+		);
 	};
 	const handleRename = (folderId: Id<"watchlistFolders">, name: string) => {
 		renameFolder({ folderId, name }).catch(() =>
@@ -652,8 +600,6 @@ function WatchlistBody({
 			toast.error("Could not move the entry."),
 		);
 	};
-	const openNewFolderFor = (entry: WatchlistEntry) =>
-		setNewFolder({ entryId: entry.entryId });
 
 	const handleDragStart = (event: DragStartEvent) => {
 		if (list === undefined) {
@@ -708,17 +654,17 @@ function WatchlistBody({
 						variant="ghost"
 						size="sm"
 						className="h-7 gap-1 px-2 text-muted-foreground text-xs"
-						onClick={() => setNewFolder({ entryId: null })}
+						onClick={() => setNewFolder(true)}
 					>
 						<FolderPlus className="size-3.5" /> New folder
 					</Button>
 				</div>
 
-				{newFolder !== null ? (
+				{newFolder ? (
 					<FolderNameInput
 						placeholder="Folder name"
-						onSubmit={(name) => handleCreateFolder(name, newFolder)}
-						onCancel={() => setNewFolder(null)}
+						onSubmit={(name) => handleCreateFolder(name)}
+						onCancel={() => setNewFolder(false)}
 					/>
 				) : null}
 
@@ -728,14 +674,11 @@ function WatchlistBody({
 						folder={folder}
 						collapsed={collapsed.has(folder.folderId)}
 						selection={selection}
-						folders={folders}
 						dndEnabled={dndEnabled}
 						onToggleCollapse={toggleCollapse}
 						onRename={handleRename}
 						onDelete={handleDelete}
 						onSelect={onSelect}
-						onMove={handleMove}
-						onNewFolderFor={openNewFolderFor}
 						onRemove={onRemove}
 					/>
 				))}
@@ -751,11 +694,8 @@ function WatchlistBody({
 										key={entry.entryId}
 										entry={entry}
 										selected={sameSelection(selection, entry)}
-										folders={folders}
 										draggable={dndEnabled}
 										onSelect={onSelect}
-										onMove={handleMove}
-										onNewFolderFor={openNewFolderFor}
 										onRemove={onRemove}
 									/>
 								))}
@@ -781,11 +721,11 @@ function WatchlistBody({
 }
 
 /**
- * The list/detail split: a vertical resizable group favoring the list (~55/45),
- * with a 25% floor per section so neither can be crushed. The ratio persists
- * via the library's own layout storage; drag and arrow-key resize are built in.
+ * The drawer's scrollable list body. Selecting a row opens the channel-detail
+ * modal (owned by the Feed route via a URL search param) — the drawer itself is
+ * just the list now, no in-drawer detail pane.
  */
-function WatchlistPanels({
+function WatchlistScroll({
 	list,
 	selection,
 	onSelect,
@@ -796,49 +736,15 @@ function WatchlistPanels({
 	onSelect: (selection: WatchlistSelection) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
-	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-		id: SPLIT_LAYOUT_ID,
-		storage: browserLayoutStorage,
-		onlySaveAfterUserInteractions: true,
-	});
-	const detail = useQuery(api.watchlist.detail, selection ?? "skip");
-
 	return (
-		<ResizablePanelGroup
-			orientation="vertical"
-			className="min-h-0 flex-1"
-			defaultLayout={defaultLayout}
-			onLayoutChanged={onLayoutChanged}
-		>
-			{/* Percent strings, not bare numbers: the library reads numbers as px. */}
-			<ResizablePanel id="list" defaultSize="55%" minSize="25%">
-				<div className="h-full overflow-y-auto p-3">
-					<WatchlistBody
-						list={list}
-						selection={selection}
-						onSelect={onSelect}
-						onRemove={onRemove}
-					/>
-				</div>
-			</ResizablePanel>
-			{/* Amplified so it reads as draggable: a tall grab zone with an
-			    always-visible grip pill and a strip highlight on hover/drag.
-			    The resize cursor and arrow-key handling come from the library. */}
-			<ResizableHandle
-				withHandle
-				aria-label="Resize Watchlist sections"
-				className="transition-colors after:transition-colors hover:after:bg-accent focus-visible:after:bg-accent active:after:bg-accent aria-[orientation=horizontal]:after:h-3"
+		<div className="min-h-0 flex-1 overflow-y-auto p-3">
+			<WatchlistBody
+				list={list}
+				selection={selection}
+				onSelect={onSelect}
+				onRemove={onRemove}
 			/>
-			<ResizablePanel id="detail" defaultSize="45%" minSize="25%">
-				<div className="h-full overflow-y-auto p-3">
-					{selection === null ? (
-						<DetailHint />
-					) : (
-						<WatchlistDetailPane detail={detail} />
-					)}
-				</div>
-			</ResizablePanel>
-		</ResizablePanelGroup>
+		</div>
 	);
 }
 
@@ -901,7 +807,7 @@ export function WatchlistDrawer({
 				closeIcon={<PanelRightClose className="size-4" />}
 				closeLabel="Collapse Watchlist"
 			/>
-			<WatchlistPanels
+			<WatchlistScroll
 				list={list}
 				selection={selection}
 				onSelect={onSelect}
@@ -969,7 +875,7 @@ export function WatchlistSheet({
 					closeIcon={<X className="size-4" />}
 					closeLabel="Close Watchlist"
 				/>
-				<WatchlistPanels
+				<WatchlistScroll
 					list={list}
 					selection={selection}
 					onSelect={onSelect}

@@ -1,5 +1,6 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
 import { topSignals } from "@nichehuntr/backend/convex/model/clonability";
+import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
 import {
 	MOMENTUM_MODEST,
 	MOMENTUM_STRONG,
@@ -149,30 +150,28 @@ export function ClonabilityRead({
 }
 
 /**
- * The top signal rationales behind the Clonability score — the one-line reasons
- * the Enrichment pass gave, so the Operator sees *why* it's a clone target, not
- * just the number. Renders nothing until the Listing is enriched.
+ * The top signals behind the Clonability score, as label + score only — the
+ * card stays scannable at the Feed's pace. The full one-line rationales the
+ * Enrichment pass gave live in the channel-detail modal. Renders nothing until
+ * the Listing is enriched.
  */
-function SignalRationales({ card }: { card: FeedCard }) {
+function SignalScores({ card }: { card: FeedCard }) {
 	const tops = topSignals(card.signals, card.form, 2);
 	if (tops.length === 0) {
 		return null;
 	}
 	return (
-		<div className="mt-3 flex flex-col gap-1 border-t pt-2">
+		<div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t pt-2">
 			{tops.map((signal) => (
-				<div key={signal.name} className="flex items-baseline gap-1.5 text-xs">
-					<span className="shrink-0 font-medium text-foreground">
+				<div
+					key={signal.name}
+					className="flex min-w-0 items-baseline gap-1.5 text-xs"
+				>
+					<span className="truncate font-medium text-foreground">
 						{signal.label}
 					</span>
 					<span className="shrink-0 text-muted-foreground tabular-nums">
 						{signal.score}
-					</span>
-					<span
-						className="truncate text-muted-foreground"
-						title={signal.rationale}
-					>
-						{signal.rationale}
 					</span>
 				</div>
 			))}
@@ -210,87 +209,106 @@ export function ListingCard({
 	card,
 	saved,
 	onToggleSave,
+	onOpen,
 }: {
 	card: FeedCard;
 	saved: boolean;
 	onToggleSave: (card: FeedCard) => void;
+	onOpen: (selection: WatchlistSelection) => void;
 }) {
+	// The whole card opens the channel-detail modal now (the old YouTube link
+	// moved to the explicit external-link icon). A div + button role keeps the
+	// trailing bookmark/external controls as their own tab stops rather than
+	// nesting them inside a card-wide anchor.
+	const open = () => onOpen({ channelId: card.channelId, form: card.form });
 	return (
-		<a
-			href={channelUrl(card.channel)}
-			target="_blank"
-			rel="noreferrer"
-			className="block transition-transform hover:-translate-y-0.5"
+		<Card
+			size="sm"
+			role="button"
+			tabIndex={0}
+			aria-label={`View ${card.channel.title} detail`}
+			onClick={open}
+			onKeyDown={(event) => {
+				if (event.key === "Enter" || event.key === " ") {
+					event.preventDefault();
+					open();
+				}
+			}}
+			className="cursor-pointer transition-transform hover:-translate-y-0.5 hover:ring-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 		>
-			<Card size="sm" className="hover:ring-foreground/20">
-				<CardHeader>
-					<div className="flex items-center gap-3">
-						{card.channel.avatarUrl ? (
-							<img
-								src={card.channel.avatarUrl}
-								alt={`${card.channel.title} avatar`}
-								className="size-10 shrink-0 rounded-full object-cover"
-							/>
-						) : (
-							<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
-								{initials(card.channel.title)}
-							</div>
-						)}
-						<div className="min-w-0">
-							<CardTitle className="truncate">{card.channel.title}</CardTitle>
-							{card.channel.handle ? (
-								<p className="truncate text-muted-foreground text-xs">
-									@{card.channel.handle}
-								</p>
-							) : null}
+			<CardHeader>
+				<div className="flex items-center gap-3">
+					{card.channel.avatarUrl ? (
+						<img
+							src={card.channel.avatarUrl}
+							alt={`${card.channel.title} avatar`}
+							className="size-10 shrink-0 rounded-full object-cover"
+						/>
+					) : (
+						<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
+							{initials(card.channel.title)}
 						</div>
-						<div className="ml-auto flex flex-col items-end gap-1">
-							<div className="flex items-center gap-1.5">
-								<FormBadge form={card.form} />
-								{/* Toggles the Watchlist save; must never follow the card's
-								    YouTube link, so it swallows the click before the anchor. */}
-								<button
-									type="button"
-									aria-pressed={saved}
-									aria-label={
-										saved ? "Remove from Watchlist" : "Save to Watchlist"
-									}
-									title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
-									onClick={(event) => {
-										event.preventDefault();
-										event.stopPropagation();
-										onToggleSave(card);
-									}}
-									className={`-m-1 rounded-md p-1 transition-colors ${
-										saved
-											? "text-primary"
-											: "text-muted-foreground hover:text-foreground"
-									}`}
-								>
-									<Bookmark
-										className={`size-4 ${saved ? "fill-current" : ""}`}
-									/>
-								</button>
-							</div>
-							<MomentumIndicator momentum={card.momentum} />
+					)}
+					<div className="min-w-0">
+						<CardTitle className="truncate">{card.channel.title}</CardTitle>
+						{card.channel.handle ? (
+							<p className="truncate text-muted-foreground text-xs">
+								@{card.channel.handle}
+							</p>
+						) : null}
+					</div>
+					<div className="ml-auto flex flex-col items-end gap-1">
+						{/* Save + open-on-YouTube ride together at the top right; both
+						    swallow the click so they never open the detail modal. */}
+						<div className="flex items-center gap-1">
+							<button
+								type="button"
+								aria-pressed={saved}
+								aria-label={
+									saved ? "Remove from Watchlist" : "Save to Watchlist"
+								}
+								title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+								onClick={(event) => {
+									event.stopPropagation();
+									onToggleSave(card);
+								}}
+								className={`rounded-md p-1 transition-colors ${
+									saved
+										? "text-primary"
+										: "text-muted-foreground hover:text-foreground"
+								}`}
+							>
+								<Bookmark className={`size-4 ${saved ? "fill-current" : ""}`} />
+							</button>
+							<a
+								href={channelUrl(card.channel)}
+								target="_blank"
+								rel="noreferrer"
+								aria-label="Open channel on YouTube"
+								title="Open channel on YouTube"
+								onClick={(event) => event.stopPropagation()}
+								className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+							>
+								<ExternalLink className="size-4" />
+							</a>
+						</div>
+						<MomentumIndicator momentum={card.momentum} />
+					</div>
+				</div>
+			</CardHeader>
+			<CardContent>
+				<div className="flex items-end justify-between gap-3">
+					<div>
+						<div className="text-muted-foreground text-xs">Median views</div>
+						<div className="font-semibold text-lg tabular-nums">
+							{compactViews.format(card.medianViews)}
 						</div>
 					</div>
-				</CardHeader>
-				<CardContent>
-					<div className="flex items-end justify-between gap-3">
-						<div>
-							<div className="text-muted-foreground text-xs">Median views</div>
-							<div className="font-semibold text-lg tabular-nums">
-								{compactViews.format(card.medianViews)}
-							</div>
-						</div>
-						<SaturationRead saturation={card.saturation} />
-						<ClonabilityRead clonability={card.clonability} />
-						<ExternalLink className="size-4 self-center text-muted-foreground" />
-					</div>
-					<SignalRationales card={card} />
-				</CardContent>
-			</Card>
-		</a>
+					<SaturationRead saturation={card.saturation} />
+					<ClonabilityRead clonability={card.clonability} />
+				</div>
+				<SignalScores card={card} />
+			</CardContent>
+		</Card>
 	);
 }

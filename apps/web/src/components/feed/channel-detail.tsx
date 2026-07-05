@@ -1,16 +1,26 @@
+import { api } from "@nichehuntr/backend/convex/_generated/api";
 import {
 	SIGNAL_SETS,
 	topSignals,
 } from "@nichehuntr/backend/convex/model/clonability";
 import type {
 	WatchlistDetail,
+	WatchlistSelection,
 	WatchlistUpload,
 } from "@nichehuntr/backend/convex/watchlist";
-import { AlertCircle, ExternalLink } from "lucide-react";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+} from "@nichehuntr/ui/components/dialog";
+import { useQuery } from "convex/react";
+import { AlertCircle, Bookmark, ExternalLink, X } from "lucide-react";
 
 import {
-	ClonabilityRead,
 	channelUrl,
+	ClonabilityRead,
 	compactViews,
 	FormBadge,
 	initials,
@@ -114,9 +124,69 @@ function SignalBreakdown({
 	);
 }
 
-function DetailHeader({ detail }: { detail: WatchlistDetail }) {
+/** The modal's top-right control cluster: save toggle, open-on-YouTube, close —
+ * mirroring the Feed card's own [bookmark][external-link] pair, with the dialog's
+ * dismiss folded onto the end. */
+function DetailControls({
+	detail,
+	saved,
+	onToggleSave,
+}: {
+	detail: WatchlistDetail;
+	saved: boolean;
+	onToggleSave: (selection: WatchlistSelection) => void;
+}) {
 	return (
-		<header className="flex items-center gap-3">
+		<div className="flex shrink-0 items-center gap-1">
+			<button
+				type="button"
+				aria-pressed={saved}
+				aria-label={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+				title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+				onClick={() =>
+					onToggleSave({ channelId: detail.channelId, form: detail.form })
+				}
+				className={`rounded-md p-1.5 transition-colors ${
+					saved
+						? "text-primary"
+						: "text-muted-foreground hover:text-foreground"
+				}`}
+			>
+				<Bookmark className={`size-4 ${saved ? "fill-current" : ""}`} />
+			</button>
+			<a
+				href={channelUrl(detail.channel)}
+				target="_blank"
+				rel="noreferrer"
+				aria-label="Open channel on YouTube"
+				title="Open channel on YouTube"
+				className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ExternalLink className="size-4" />
+			</a>
+			<DialogClose
+				aria-label="Close"
+				className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<X className="size-4" />
+			</DialogClose>
+		</div>
+	);
+}
+
+/** Identity row for the detail: avatar, title + form badge, and the channel
+ * handle. The save / external / close controls ride at the far right. */
+function DetailHeader({
+	detail,
+	saved,
+	onToggleSave,
+}: {
+	detail: WatchlistDetail;
+	saved: boolean;
+	onToggleSave: (selection: WatchlistSelection) => void;
+}) {
+	return (
+		<header className="flex items-start gap-3">
 			{detail.channel.avatarUrl ? (
 				<img
 					src={detail.channel.avatarUrl}
@@ -130,57 +200,40 @@ function DetailHeader({ detail }: { detail: WatchlistDetail }) {
 			)}
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-1.5">
-					<h3 className="truncate font-heading font-medium text-sm">
+					<DialogTitle className="truncate text-sm">
 						{detail.channel.title}
-					</h3>
+					</DialogTitle>
 					<FormBadge form={detail.form} />
 				</div>
-				<a
-					href={channelUrl(detail.channel)}
-					target="_blank"
-					rel="noreferrer"
-					className="inline-flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
-				>
+				<DialogDescription className="text-xs">
 					{detail.channel.handle
 						? `@${detail.channel.handle}`
-						: "View on YouTube"}
-					<ExternalLink className="size-3" aria-hidden />
-				</a>
+						: "Channel detail"}
+				</DialogDescription>
 			</div>
+			<DetailControls detail={detail} saved={saved} onToggleSave={onToggleSave} />
 		</header>
 	);
 }
 
-/** The quiet placeholder when nothing is selected in the list above. */
-export function DetailHint() {
-	return (
-		<p className="px-4 py-8 text-center text-muted-foreground text-xs">
-			Select a channel to see its detail.
-		</p>
-	);
-}
-
 /**
- * The drawer's deep detail view for the selected entry. The Listing half is
- * re-derived live (ADR-0004): when the pair is off the Feed the pane degrades
- * to identity + uploads with an explicit notice — a product state, not an
- * error — since the videos persist even when the Listing doesn't.
+ * The detail body for a resolved (channel, form). The Listing half is re-derived
+ * live (ADR-0004): when the pair is off the Feed the pane degrades to identity +
+ * uploads with an explicit notice — a product state, not an error — since the
+ * videos persist even when the Listing doesn't.
  */
-export function WatchlistDetailPane({
+function DetailBody({
 	detail,
+	saved,
+	onToggleSave,
 }: {
-	detail: WatchlistDetail | null | undefined;
+	detail: WatchlistDetail;
+	saved: boolean;
+	onToggleSave: (selection: WatchlistSelection) => void;
 }) {
-	if (detail === undefined) {
-		return <Loader />;
-	}
-	if (detail === null) {
-		// The channel itself is gone from under the entry — nothing to show.
-		return <DetailHint />;
-	}
 	return (
-		<div className="flex flex-col gap-4">
-			<DetailHeader detail={detail} />
+		<div className="flex min-w-0 flex-col gap-4">
+			<DetailHeader detail={detail} saved={saved} onToggleSave={onToggleSave} />
 			{detail.channel.description ? (
 				<p className="text-muted-foreground text-xs">
 					{detail.channel.description}
@@ -214,5 +267,70 @@ export function WatchlistDetailPane({
 			)}
 			<UploadsStrip uploads={detail.uploads} />
 		</div>
+	);
+}
+
+/**
+ * The channel-details modal, opened from a Feed card or a saved Watchlist row.
+ * Open state is owned by the caller (a URL search param on the Feed route), so
+ * the detail is deep-linkable and the browser Back button closes it. Powered by
+ * `watchlist.detail`, which resolves for any (channel, form) — saved or not — so
+ * the modal works straight off an unsaved Feed card.
+ */
+export function ChannelDetailDialog({
+	selection,
+	saved,
+	onToggleSave,
+	onClose,
+}: {
+	selection: WatchlistSelection | null;
+	saved: boolean;
+	onToggleSave: (selection: WatchlistSelection) => void;
+	onClose: () => void;
+}) {
+	const detail = useQuery(api.watchlist.detail, selection ?? "skip");
+
+	return (
+		<Dialog
+			open={selection !== null}
+			onOpenChange={(open) => {
+				if (!open) {
+					onClose();
+				}
+			}}
+		>
+			<DialogContent
+				showCloseButton={false}
+				className="max-h-[85vh] max-w-2xl overflow-y-auto overflow-x-hidden"
+			>
+				{selection === null ? null : detail === undefined ? (
+					<>
+						<DialogTitle className="sr-only">Channel detail</DialogTitle>
+						<Loader />
+					</>
+				) : detail === null ? (
+					<div className="flex flex-col gap-2">
+						<div className="flex items-start justify-between gap-3">
+							<DialogTitle className="text-sm">Channel unavailable</DialogTitle>
+							<DialogClose
+								aria-label="Close"
+								className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+							>
+								<X className="size-4" />
+							</DialogClose>
+						</div>
+						<DialogDescription className="text-xs">
+							This channel is no longer available.
+						</DialogDescription>
+					</div>
+				) : (
+					<DetailBody
+						detail={detail}
+						saved={saved}
+						onToggleSave={onToggleSave}
+					/>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }

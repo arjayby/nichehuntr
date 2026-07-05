@@ -1,4 +1,5 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
+import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import type { FeedCard, FeedGroup } from "@nichehuntr/backend/convex/feed";
 import type {
 	WatchlistEntry,
@@ -10,17 +11,29 @@ import { useMutation, useQuery } from "convex/react";
 import { Bookmark } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { z } from "zod";
 
+import { ChannelDetailDialog } from "@/components/feed/channel-detail";
 import { ListingCard, STAGE_LABELS } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import {
-	sameSelection,
 	useWatchlistDrawerOpen,
 	WatchlistDrawer,
 	WatchlistSheet,
 } from "@/components/watchlist/watchlist-drawer";
 
+// The open channel-detail modal, deep-linked in the URL: `channel` is the
+// channel id, `form` its Short/Long variant. Both present ⇒ the modal is open,
+// so Back closes it and the detail is shareable. Independent of the Feed's own
+// Short/Long toggle (which stays local state — you can inspect a saved Long
+// channel while the Feed shows Shorts).
+const searchSchema = z.object({
+	channel: z.string().optional().catch(undefined),
+	form: z.enum(["short", "long"]).optional().catch(undefined),
+});
+
 export const Route = createFileRoute("/_auth/_subscribed/feed")({
+	validateSearch: searchSchema,
 	component: FeedPage,
 });
 
@@ -33,6 +46,8 @@ function savedKey(channelId: string, form: Form): string {
 }
 
 function FeedPage() {
+	const navigate = Route.useNavigate();
+	const search = Route.useSearch();
 	const [form, setForm] = useState<Form>("short");
 	const groups = useQuery(api.feed.feed, { form });
 
@@ -51,44 +66,42 @@ function FeedPage() {
 		];
 		return new Set(all.map((entry) => savedKey(entry.channelId, entry.form)));
 	}, [watchlist]);
-	// Which entry the drawer's detail pane shows — session state only, keyed by
-	// the entry identity (channel, form) (ADR-0004). Nothing selected initially.
-	const [selection, setSelection] = useState<WatchlistSelection | null>(null);
-	const handleToggleSave = (card: FeedCard) => {
-		const key: WatchlistSelection = {
-			channelId: card.channelId,
-			form: card.form,
-		};
-		toggleSave(key)
-			.then(({ saved }) => {
-				// Saving a card auto-selects its new entry; unsaving the selected
-				// entry clears the pane back to the hint.
-				setSelection((current) =>
-					saved ? key : sameSelection(current, key) ? null : current,
-				);
-			})
-			.catch(() => {
-				toast.error("Could not update your Watchlist.");
-			});
+	// Which (channel, form) the detail modal shows, read straight from the URL
+	// (ADR-0004 entry identity). Both params present ⇒ open.
+	const selection: WatchlistSelection | null =
+		search.channel && search.form
+			? { channelId: search.channel as Id<"channels">, form: search.form }
+			: null;
+	const selectionSaved =
+		selection !== null &&
+		savedKeys.has(savedKey(selection.channelId, selection.form));
+	const openDetail = (sel: WatchlistSelection) => {
+		navigate({
+			search: (prev) => ({ ...prev, channel: sel.channelId, form: sel.form }),
+		});
 	};
-	// Removing an entry from the drawer is the same unsave as the card bookmark:
-	// toggle the (channel, form) off and clear the pane if it was showing it.
-	// Narrow to the pair — `toggle` validates its args strictly, so the entry's
-	// extra fields must not ride along.
+	const closeDetail = () => {
+		// Replace, not push: opening the modal pushed a history entry, so closing
+		// must not leave a params-bearing entry behind — otherwise Back after an
+		// explicit close (×/Escape/backdrop) would reopen the modal.
+		navigate({
+			replace: true,
+			search: (prev) => ({ ...prev, channel: undefined, form: undefined }),
+		});
+	};
+	// Save/unsave is decoupled from opening the modal: the bookmark just toggles
+	// the (channel, form) pair. `toggle` validates its args strictly, so only the
+	// pair may ride along — no extra entry fields.
+	const toggleSaveSelection = (sel: WatchlistSelection) => {
+		toggleSave({ channelId: sel.channelId, form: sel.form }).catch(() => {
+			toast.error("Could not update your Watchlist.");
+		});
+	};
+	const handleToggleSave = (card: FeedCard) => {
+		toggleSaveSelection({ channelId: card.channelId, form: card.form });
+	};
 	const handleRemoveEntry = (entry: WatchlistEntry) => {
-		const key: WatchlistSelection = {
-			channelId: entry.channelId,
-			form: entry.form,
-		};
-		toggleSave(key)
-			.then(() => {
-				setSelection((current) =>
-					sameSelection(current, key) ? null : current,
-				);
-			})
-			.catch(() => {
-				toast.error("Could not update your Watchlist.");
-			});
+		toggleSaveSelection({ channelId: entry.channelId, form: entry.form });
 	};
 
 	const drawer = useWatchlistDrawerOpen();
@@ -157,6 +170,7 @@ function FeedPage() {
 									cards={group.cards}
 									savedKeys={savedKeys}
 									onToggleSave={handleToggleSave}
+									onOpen={openDetail}
 								/>
 							))}
 						</div>
@@ -168,7 +182,7 @@ function FeedPage() {
 				<WatchlistDrawer
 					list={watchlist}
 					selection={selection}
-					onSelect={setSelection}
+					onSelect={openDetail}
 					onRemove={handleRemoveEntry}
 					onCollapse={() => drawer.setOpen(false)}
 				/>
@@ -176,10 +190,16 @@ function FeedPage() {
 			<WatchlistSheet
 				list={watchlist}
 				selection={selection}
-				onSelect={setSelection}
+				onSelect={openDetail}
 				onRemove={handleRemoveEntry}
 				open={sheetOpen}
 				onClose={() => setSheetOpen(false)}
+			/>
+			<ChannelDetailDialog
+				selection={selection}
+				saved={selectionSaved}
+				onToggleSave={toggleSaveSelection}
+				onClose={closeDetail}
 			/>
 		</div>
 	);
@@ -190,11 +210,13 @@ function FeedColumn({
 	cards,
 	savedKeys,
 	onToggleSave,
+	onOpen,
 }: {
 	stage: Stage;
 	cards: FeedCard[];
 	savedKeys: Set<string>;
 	onToggleSave: (card: FeedCard) => void;
+	onOpen: (selection: WatchlistSelection) => void;
 }) {
 	return (
 		<section className="flex flex-col gap-3">
@@ -217,6 +239,7 @@ function FeedColumn({
 						card={card}
 						saved={savedKeys.has(savedKey(card.channelId, card.form))}
 						onToggleSave={onToggleSave}
+						onOpen={onOpen}
 					/>
 				))
 			)}
