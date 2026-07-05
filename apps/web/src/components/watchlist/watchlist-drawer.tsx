@@ -1,9 +1,23 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
+import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import type {
 	WatchlistEntry,
+	WatchlistFolderGroup,
+	WatchlistList,
 	WatchlistSelection,
 } from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
+	DropdownMenuTrigger,
+} from "@nichehuntr/ui/components/dropdown-menu";
+import { Input } from "@nichehuntr/ui/components/input";
 import {
 	browserLayoutStorage,
 	ResizableHandle,
@@ -11,9 +25,23 @@ import {
 	ResizablePanelGroup,
 	useDefaultLayout,
 } from "@nichehuntr/ui/components/resizable";
-import { useQuery } from "convex/react";
-import { Bookmark, PanelRightClose, X } from "lucide-react";
+import { useMutation, useQuery } from "convex/react";
+import {
+	Bookmark,
+	BookmarkX,
+	ChevronDown,
+	ChevronRight,
+	Folder,
+	FolderInput,
+	FolderPlus,
+	MoreHorizontal,
+	PanelRightClose,
+	Pencil,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
@@ -25,6 +53,7 @@ import { cn } from "@/lib/utils";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
 const SPLIT_LAYOUT_ID = "nichehuntr.watchlist-drawer.split";
+const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
 
 /** Two entries share one identity when they point at the same (channel, form)
  * pair — the entry identity of ADR-0004. */
@@ -34,6 +63,14 @@ export function sameSelection(
 ): boolean {
 	return (
 		a !== null && b !== null && a.channelId === b.channelId && a.form === b.form
+	);
+}
+
+/** Total saved entries across the root and every Folder — the header count. */
+function totalEntries(list: WatchlistList): number {
+	return (
+		list.root.length +
+		list.folders.reduce((sum, folder) => sum + folder.entries.length, 0)
 	);
 }
 
@@ -60,84 +97,471 @@ export function useWatchlistDrawerOpen() {
 	return { open, setOpen: setAndPersist };
 }
 
+/**
+ * Which Folders are collapsed, persisted in localStorage as an array of folder
+ * ids. Same SSR-safe shape as `useWatchlistDrawerOpen`: default expanded, the
+ * stored set applied after mount.
+ */
+function useCollapsedFolders() {
+	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+
+	useEffect(() => {
+		const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+		if (stored !== null) {
+			try {
+				setCollapsed(new Set(JSON.parse(stored) as string[]));
+			} catch {
+				// Corrupt value — start from all-expanded rather than crash.
+			}
+		}
+	}, []);
+
+	const toggle = useCallback((folderId: string) => {
+		setCollapsed((current) => {
+			const next = new Set(current);
+			if (next.has(folderId)) {
+				next.delete(folderId);
+			} else {
+				next.add(folderId);
+			}
+			window.localStorage.setItem(
+				COLLAPSED_STORAGE_KEY,
+				JSON.stringify([...next]),
+			);
+			return next;
+		});
+	}, []);
+
+	return { collapsed, toggle };
+}
+
+/** The `⋯` icon-trigger shared by entry and Folder menus. On mouse (fine
+ * pointer) devices it stays quiet at rest and reveals on hover/focus/open; on
+ * touch (coarse pointer) there is no hover, so it is always visible or the menu
+ * would be unreachable in the mobile sheet. */
+const MENU_TRIGGER_CLASS =
+	"size-7 shrink-0 text-muted-foreground opacity-100 transition-opacity data-[popup-open]:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100";
+
+/** An inline text field for naming or renaming a Folder: Enter commits a
+ * non-empty name, Escape or blur cancels. Autofocused so it's type-ready. */
+function FolderNameInput({
+	initialValue = "",
+	placeholder,
+	onSubmit,
+	onCancel,
+}: {
+	initialValue?: string;
+	placeholder?: string;
+	onSubmit: (name: string) => void;
+	onCancel: () => void;
+}) {
+	const [value, setValue] = useState(initialValue);
+	return (
+		<Input
+			autoFocus
+			value={value}
+			placeholder={placeholder}
+			aria-label={placeholder ?? "Folder name"}
+			className="h-8 text-sm"
+			onChange={(event) => setValue(event.target.value)}
+			onKeyDown={(event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					const trimmed = value.trim();
+					if (trimmed.length > 0) {
+						onSubmit(trimmed);
+					}
+				} else if (event.key === "Escape") {
+					event.preventDefault();
+					onCancel();
+				}
+			}}
+			onBlur={onCancel}
+		/>
+	);
+}
+
+/** The per-entry `⋯` menu: file into a Folder / back to root / a new Folder, or
+ * remove from the Watchlist (identical to toggling the card's bookmark off). */
+function EntryMenu({
+	entry,
+	folders,
+	onMove,
+	onNewFolderFor,
+	onRemove,
+}: {
+	entry: WatchlistEntry;
+	folders: WatchlistFolderGroup[];
+	onMove: (
+		entry: WatchlistEntry,
+		folderId: Id<"watchlistFolders"> | null,
+	) => void;
+	onNewFolderFor: (entry: WatchlistEntry) => void;
+	onRemove: (entry: WatchlistEntry) => void;
+}) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger
+				render={
+					<Button
+						variant="ghost"
+						size="icon"
+						className={MENU_TRIGGER_CLASS}
+						aria-label={`Actions for ${entry.channel.title}`}
+					/>
+				}
+			>
+				<MoreHorizontal className="size-4" />
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				<DropdownMenuSub>
+					<DropdownMenuSubTrigger>
+						<FolderInput /> Move to folder
+					</DropdownMenuSubTrigger>
+					<DropdownMenuSubContent>
+						{entry.folderId !== null ? (
+							<>
+								<DropdownMenuItem onClick={() => onMove(entry, null)}>
+									Move to root
+								</DropdownMenuItem>
+								<DropdownMenuSeparator />
+							</>
+						) : null}
+						{folders.map((folder) => (
+							<DropdownMenuItem
+								key={folder.folderId}
+								disabled={folder.folderId === entry.folderId}
+								onClick={() => onMove(entry, folder.folderId)}
+							>
+								<Folder /> <span className="truncate">{folder.name}</span>
+							</DropdownMenuItem>
+						))}
+						{folders.length > 0 ? <DropdownMenuSeparator /> : null}
+						<DropdownMenuItem onClick={() => onNewFolderFor(entry)}>
+							<FolderPlus /> New folder…
+						</DropdownMenuItem>
+					</DropdownMenuSubContent>
+				</DropdownMenuSub>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem variant="destructive" onClick={() => onRemove(entry)}>
+					<BookmarkX /> Remove from watchlist
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
 function WatchlistRow({
 	entry,
 	selected,
+	folders,
 	onSelect,
+	onMove,
+	onNewFolderFor,
+	onRemove,
 }: {
 	entry: WatchlistEntry;
 	selected: boolean;
+	folders: WatchlistFolderGroup[];
 	onSelect: (selection: WatchlistSelection) => void;
+	onMove: (
+		entry: WatchlistEntry,
+		folderId: Id<"watchlistFolders"> | null,
+	) => void;
+	onNewFolderFor: (entry: WatchlistEntry) => void;
+	onRemove: (entry: WatchlistEntry) => void;
 }) {
 	return (
 		<li>
-			<button
-				type="button"
-				aria-current={selected}
-				onClick={() =>
-					onSelect({ channelId: entry.channelId, form: entry.form })
-				}
+			<div
 				className={cn(
-					"flex w-full items-center gap-3 rounded-2xl border border-border px-3 py-2 text-left transition-colors hover:bg-accent",
+					"group flex items-center gap-1 rounded-2xl border border-border pr-1 transition-colors hover:bg-accent",
 					selected && "border-foreground/30 bg-accent",
 					// Off the Feed: muted but still selectable — the detail pane
 					// explains why (ADR-0004: the entry outlives the Listing).
 					!entry.onFeed && "opacity-60",
 				)}
 			>
-				{entry.channel.avatarUrl ? (
-					<img
-						src={entry.channel.avatarUrl}
-						alt={`${entry.channel.title} avatar`}
-						className="size-8 shrink-0 rounded-full object-cover"
-					/>
-				) : (
-					<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
-						{initials(entry.channel.title)}
-					</div>
-				)}
-				<span className="min-w-0 flex-1 truncate font-medium text-sm">
-					{entry.channel.title}
-				</span>
-				<FormBadge form={entry.form} />
-			</button>
+				<button
+					type="button"
+					aria-current={selected}
+					onClick={() =>
+						onSelect({ channelId: entry.channelId, form: entry.form })
+					}
+					className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
+				>
+					{entry.channel.avatarUrl ? (
+						<img
+							src={entry.channel.avatarUrl}
+							alt={`${entry.channel.title} avatar`}
+							className="size-8 shrink-0 rounded-full object-cover"
+						/>
+					) : (
+						<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
+							{initials(entry.channel.title)}
+						</div>
+					)}
+					<span className="min-w-0 flex-1 truncate font-medium text-sm">
+						{entry.channel.title}
+					</span>
+					<FormBadge form={entry.form} />
+				</button>
+				<EntryMenu
+					entry={entry}
+					folders={folders}
+					onMove={onMove}
+					onNewFolderFor={onNewFolderFor}
+					onRemove={onRemove}
+				/>
+			</div>
 		</li>
 	);
 }
 
-/** The drawer's list section: the Operator's whole Watchlist, newest-first, flat. */
+/** A Folder: a collapsible header (chevron + name + count + `⋯` rename/delete)
+ * over its entries, newest-first. Collapsing hides the entries only. */
+function FolderGroup({
+	folder,
+	collapsed,
+	selection,
+	folders,
+	onToggleCollapse,
+	onRename,
+	onDelete,
+	onSelect,
+	onMove,
+	onNewFolderFor,
+	onRemove,
+}: {
+	folder: WatchlistFolderGroup;
+	collapsed: boolean;
+	selection: WatchlistSelection | null;
+	folders: WatchlistFolderGroup[];
+	onToggleCollapse: (folderId: string) => void;
+	onRename: (folderId: Id<"watchlistFolders">, name: string) => void;
+	onDelete: (folderId: Id<"watchlistFolders">) => void;
+	onSelect: (selection: WatchlistSelection) => void;
+	onMove: (
+		entry: WatchlistEntry,
+		folderId: Id<"watchlistFolders"> | null,
+	) => void;
+	onNewFolderFor: (entry: WatchlistEntry) => void;
+	onRemove: (entry: WatchlistEntry) => void;
+}) {
+	const [renaming, setRenaming] = useState(false);
+
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="group flex items-center gap-1">
+				{renaming ? (
+					<div className="flex-1 pl-1">
+						<FolderNameInput
+							initialValue={folder.name}
+							placeholder="Folder name"
+							onSubmit={(name) => {
+								setRenaming(false);
+								onRename(folder.folderId, name);
+							}}
+							onCancel={() => setRenaming(false)}
+						/>
+					</div>
+				) : (
+					<button
+						type="button"
+						aria-expanded={!collapsed}
+						onClick={() => onToggleCollapse(folder.folderId)}
+						className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent"
+					>
+						{collapsed ? (
+							<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+						)}
+						<span className="min-w-0 flex-1 truncate font-medium text-sm">
+							{folder.name}
+						</span>
+						<span className="text-muted-foreground text-xs tabular-nums">
+							{folder.entries.length}
+						</span>
+					</button>
+				)}
+				<DropdownMenu>
+					<DropdownMenuTrigger
+						render={
+							<Button
+								variant="ghost"
+								size="icon"
+								className={MENU_TRIGGER_CLASS}
+								aria-label={`Folder actions for ${folder.name}`}
+							/>
+						}
+					>
+						<MoreHorizontal className="size-4" />
+					</DropdownMenuTrigger>
+					<DropdownMenuContent align="end">
+						<DropdownMenuItem onClick={() => setRenaming(true)}>
+							<Pencil /> Rename
+						</DropdownMenuItem>
+						<DropdownMenuItem
+							variant="destructive"
+							onClick={() => onDelete(folder.folderId)}
+						>
+							<Trash2 /> Delete folder
+						</DropdownMenuItem>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			</div>
+			{!collapsed && folder.entries.length > 0 ? (
+				<ul className="flex flex-col gap-2 pl-2">
+					{folder.entries.map((entry) => (
+						<WatchlistRow
+							key={entry.entryId}
+							entry={entry}
+							selected={sameSelection(selection, entry)}
+							folders={folders}
+							onSelect={onSelect}
+							onMove={onMove}
+							onNewFolderFor={onNewFolderFor}
+							onRemove={onRemove}
+						/>
+					))}
+				</ul>
+			) : null}
+		</div>
+	);
+}
+
+/** Filing a new Folder around a specific entry, or `null` to just create one. */
+type NewFolderTarget = { entryId: Id<"watchlistEntries"> | null };
+
+/**
+ * The drawer's list section: the Operator's whole Watchlist grouped into
+ * Folders (alphabetical) over the root entries (newest-first). Folder create /
+ * rename / delete and entry filing all run against the watchlist mutations;
+ * removal reuses the caller's bookmark toggle for parity with the Feed card.
+ */
 function WatchlistBody({
-	entries,
+	list,
 	selection,
 	onSelect,
+	onRemove,
 }: {
-	entries: WatchlistEntry[] | undefined;
+	list: WatchlistList | undefined;
 	selection: WatchlistSelection | null;
 	onSelect: (selection: WatchlistSelection) => void;
+	onRemove: (entry: WatchlistEntry) => void;
 }) {
-	if (entries === undefined) {
+	const createFolder = useMutation(api.watchlist.createFolder);
+	const renameFolder = useMutation(api.watchlist.renameFolder);
+	const deleteFolder = useMutation(api.watchlist.deleteFolder);
+	const setEntryFolder = useMutation(api.watchlist.setEntryFolder);
+	const { collapsed, toggle: toggleCollapse } = useCollapsedFolders();
+	const [newFolder, setNewFolder] = useState<NewFolderTarget | null>(null);
+
+	const handleCreateFolder = (name: string, target: NewFolderTarget) => {
+		setNewFolder(null);
+		createFolder({ name })
+			.then(({ folderId }) =>
+				// "New folder…" from an entry files it into the folder in one motion.
+				target.entryId !== null
+					? setEntryFolder({ entryId: target.entryId, folderId })
+					: undefined,
+			)
+			.catch(() => toast.error("Could not create the folder."));
+	};
+	const handleRename = (folderId: Id<"watchlistFolders">, name: string) => {
+		renameFolder({ folderId, name }).catch(() =>
+			toast.error("Could not rename the folder."),
+		);
+	};
+	const handleDelete = (folderId: Id<"watchlistFolders">) => {
+		deleteFolder({ folderId }).catch(() =>
+			toast.error("Could not delete the folder."),
+		);
+	};
+	const handleMove = (
+		entry: WatchlistEntry,
+		folderId: Id<"watchlistFolders"> | null,
+	) => {
+		setEntryFolder({ entryId: entry.entryId, folderId }).catch(() =>
+			toast.error("Could not move the entry."),
+		);
+	};
+	const openNewFolderFor = (entry: WatchlistEntry) =>
+		setNewFolder({ entryId: entry.entryId });
+
+	if (list === undefined) {
 		return <Loader />;
 	}
-	if (entries.length === 0) {
-		return (
-			<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
-				Your Watchlist is empty. Save a clone candidate with the{" "}
-				<Bookmark className="inline size-3 align-[-2px]" aria-hidden /> bookmark
-				on a Feed card.
-			</p>
-		);
-	}
+
+	const { folders, root } = list;
+	const isEmpty = folders.length === 0 && root.length === 0;
+
 	return (
-		<ul className="flex flex-col gap-2">
-			{entries.map((entry) => (
-				<WatchlistRow
-					key={entry.entryId}
-					entry={entry}
-					selected={sameSelection(selection, entry)}
+		<div className="flex flex-col gap-2">
+			<div className="flex justify-end">
+				<Button
+					variant="ghost"
+					size="sm"
+					className="h-7 gap-1 px-2 text-muted-foreground text-xs"
+					onClick={() => setNewFolder({ entryId: null })}
+				>
+					<FolderPlus className="size-3.5" /> New folder
+				</Button>
+			</div>
+
+			{newFolder !== null ? (
+				<FolderNameInput
+					placeholder="Folder name"
+					onSubmit={(name) => handleCreateFolder(name, newFolder)}
+					onCancel={() => setNewFolder(null)}
+				/>
+			) : null}
+
+			{folders.map((folder) => (
+				<FolderGroup
+					key={folder.folderId}
+					folder={folder}
+					collapsed={collapsed.has(folder.folderId)}
+					selection={selection}
+					folders={folders}
+					onToggleCollapse={toggleCollapse}
+					onRename={handleRename}
+					onDelete={handleDelete}
 					onSelect={onSelect}
+					onMove={handleMove}
+					onNewFolderFor={openNewFolderFor}
+					onRemove={onRemove}
 				/>
 			))}
-		</ul>
+
+			{root.length > 0 ? (
+				<ul className="flex flex-col gap-2">
+					{root.map((entry) => (
+						<WatchlistRow
+							key={entry.entryId}
+							entry={entry}
+							selected={sameSelection(selection, entry)}
+							folders={folders}
+							onSelect={onSelect}
+							onMove={handleMove}
+							onNewFolderFor={openNewFolderFor}
+							onRemove={onRemove}
+						/>
+					))}
+				</ul>
+			) : null}
+
+			{isEmpty ? (
+				<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
+					Your Watchlist is empty. Save a clone candidate with the{" "}
+					<Bookmark className="inline size-3 align-[-2px]" aria-hidden />{" "}
+					bookmark on a Feed card.
+				</p>
+			) : null}
+		</div>
 	);
 }
 
@@ -147,13 +571,15 @@ function WatchlistBody({
  * via the library's own layout storage; drag and arrow-key resize are built in.
  */
 function WatchlistPanels({
-	entries,
+	list,
 	selection,
 	onSelect,
+	onRemove,
 }: {
-	entries: WatchlistEntry[] | undefined;
+	list: WatchlistList | undefined;
 	selection: WatchlistSelection | null;
 	onSelect: (selection: WatchlistSelection) => void;
+	onRemove: (entry: WatchlistEntry) => void;
 }) {
 	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
 		id: SPLIT_LAYOUT_ID,
@@ -173,9 +599,10 @@ function WatchlistPanels({
 			<ResizablePanel id="list" defaultSize="55%" minSize="25%">
 				<div className="h-full overflow-y-auto p-3">
 					<WatchlistBody
-						entries={entries}
+						list={list}
 						selection={selection}
 						onSelect={onSelect}
+						onRemove={onRemove}
 					/>
 				</div>
 			</ResizablePanel>
@@ -239,28 +666,31 @@ function WatchlistHeader({
  * Rendered at `lg` and up as a fixed-width column that pushes the Feed grid.
  */
 export function WatchlistDrawer({
-	entries,
+	list,
 	selection,
 	onSelect,
+	onRemove,
 	onCollapse,
 }: {
-	entries: WatchlistEntry[] | undefined;
+	list: WatchlistList | undefined;
 	selection: WatchlistSelection | null;
 	onSelect: (selection: WatchlistSelection) => void;
+	onRemove: (entry: WatchlistEntry) => void;
 	onCollapse: () => void;
 }) {
 	return (
 		<aside className="hidden w-[380px] shrink-0 flex-col border-border border-l lg:flex">
 			<WatchlistHeader
-				count={entries?.length}
+				count={list ? totalEntries(list) : undefined}
 				onClose={onCollapse}
 				closeIcon={<PanelRightClose className="size-4" />}
 				closeLabel="Collapse Watchlist"
 			/>
 			<WatchlistPanels
-				entries={entries}
+				list={list}
 				selection={selection}
 				onSelect={onSelect}
+				onRemove={onRemove}
 			/>
 		</aside>
 	);
@@ -268,15 +698,17 @@ export function WatchlistDrawer({
 
 /** The below-`lg` fallback: the same Watchlist as a toggleable overlay sheet. */
 export function WatchlistSheet({
-	entries,
+	list,
 	selection,
 	onSelect,
+	onRemove,
 	open,
 	onClose,
 }: {
-	entries: WatchlistEntry[] | undefined;
+	list: WatchlistList | undefined;
 	selection: WatchlistSelection | null;
 	onSelect: (selection: WatchlistSelection) => void;
+	onRemove: (entry: WatchlistEntry) => void;
 	open: boolean;
 	onClose: () => void;
 }) {
@@ -317,15 +749,16 @@ export function WatchlistSheet({
 			/>
 			<div className="absolute inset-y-0 right-0 flex w-[85vw] max-w-[380px] flex-col border-border border-l bg-background">
 				<WatchlistHeader
-					count={entries?.length}
+					count={list ? totalEntries(list) : undefined}
 					onClose={onClose}
 					closeIcon={<X className="size-4" />}
 					closeLabel="Close Watchlist"
 				/>
 				<WatchlistPanels
-					entries={entries}
+					list={list}
 					selection={selection}
 					onSelect={onSelect}
+					onRemove={onRemove}
 				/>
 			</div>
 		</div>

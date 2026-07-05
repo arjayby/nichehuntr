@@ -22,7 +22,7 @@ async function addChannel(
 }
 
 describe("watchlist", () => {
-	it("saves a (channel, form) on toggle and lists it with channel identity", async () => {
+	it("saves a (channel, form) on toggle and lists it at the root with channel identity", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) => addChannel(ctx, "AI Horror"));
 
@@ -32,11 +32,13 @@ describe("watchlist", () => {
 		});
 		expect(result).toEqual({ saved: true });
 
-		const entries = await operator.query(api.watchlist.entries, {});
-		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({
+		const { folders, root } = await operator.query(api.watchlist.list, {});
+		expect(folders).toEqual([]);
+		expect(root).toHaveLength(1);
+		expect(root[0]).toMatchObject({
 			channelId,
 			form: "short",
+			folderId: null,
 			channel: {
 				ytId: "yt_AI_Horror",
 				title: "AI Horror",
@@ -57,7 +59,8 @@ describe("watchlist", () => {
 		});
 		expect(second).toEqual({ saved: false });
 
-		expect(await operator.query(api.watchlist.entries, {})).toEqual([]);
+		const { root } = await operator.query(api.watchlist.list, {});
+		expect(root).toEqual([]);
 	});
 
 	it("keeps a straddling channel's two form faces as two distinct entries", async () => {
@@ -67,14 +70,14 @@ describe("watchlist", () => {
 		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
 		await operator.mutation(api.watchlist.toggle, { channelId, form: "long" });
 
-		const entries = await operator.query(api.watchlist.entries, {});
-		expect(entries).toHaveLength(2);
-		expect(entries.map((e) => e.form).sort()).toEqual(["long", "short"]);
+		const { root } = await operator.query(api.watchlist.list, {});
+		expect(root).toHaveLength(2);
+		expect(root.map((e) => e.form).sort()).toEqual(["long", "short"]);
 
 		// Unsaving one face leaves the other untouched.
 		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
-		const remaining = await operator.query(api.watchlist.entries, {});
-		expect(remaining.map((e) => e.form)).toEqual(["long"]);
+		const remaining = await operator.query(api.watchlist.list, {});
+		expect(remaining.root.map((e) => e.form)).toEqual(["long"]);
 	});
 
 	it("scopes entries to the calling Operator", async () => {
@@ -84,15 +87,15 @@ describe("watchlist", () => {
 
 		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
 
-		expect(await rival.query(api.watchlist.entries, {})).toEqual([]);
+		expect((await rival.query(api.watchlist.list, {})).root).toEqual([]);
 
 		// The rival saving the same card is their own entry, not a dedupe hit.
 		await rival.mutation(api.watchlist.toggle, { channelId, form: "short" });
-		expect(await rival.query(api.watchlist.entries, {})).toHaveLength(1);
-		expect(await operator.query(api.watchlist.entries, {})).toHaveLength(1);
+		expect((await rival.query(api.watchlist.list, {})).root).toHaveLength(1);
+		expect((await operator.query(api.watchlist.list, {})).root).toHaveLength(1);
 	});
 
-	it("lists entries newest-first", async () => {
+	it("lists root entries newest-first", async () => {
 		const { t, operator } = await setup();
 		const first = await t.run((ctx) => addChannel(ctx, "Saved First"));
 		const second = await t.run((ctx) => addChannel(ctx, "Saved Second"));
@@ -106,8 +109,8 @@ describe("watchlist", () => {
 			form: "long",
 		});
 
-		const entries = await operator.query(api.watchlist.entries, {});
-		expect(entries.map((e) => e.channel.title)).toEqual([
+		const { root } = await operator.query(api.watchlist.list, {});
+		expect(root.map((e) => e.channel.title)).toEqual([
 			"Saved Second",
 			"Saved First",
 		]);
@@ -329,9 +332,9 @@ describe("watchlist", () => {
 			form: "short",
 		});
 
-		const entries = await operator.query(api.watchlist.entries, {});
+		const { root } = await operator.query(api.watchlist.list, {});
 		const byKey = new Map(
-			entries.map((e) => [`${e.channel.title}:${e.form}`, e.onFeed]),
+			root.map((e) => [`${e.channel.title}:${e.form}`, e.onFeed]),
 		);
 		expect(byKey.get("Still Live:short")).toBe(true);
 		expect(byKey.get("Still Live:long")).toBe(false);
@@ -345,11 +348,244 @@ describe("watchlist", () => {
 		await expect(
 			t.mutation(api.watchlist.toggle, { channelId, form: "short" }),
 		).rejects.toThrow(/authenticated/i);
-		await expect(t.query(api.watchlist.entries, {})).rejects.toThrow(
+		await expect(t.query(api.watchlist.list, {})).rejects.toThrow(
 			/authenticated/i,
 		);
 		await expect(
 			t.query(api.watchlist.detail, { channelId, form: "short" }),
+		).rejects.toThrow(/authenticated/i);
+	});
+});
+
+describe("watchlist folders", () => {
+	/** Save a channel and return the freshly created entry's id. */
+	async function saveEntry(
+		operator: Awaited<ReturnType<typeof asSubscribedOperator>>,
+		channelId: Id<"channels">,
+		form: "short" | "long" = "short",
+	): Promise<Id<"watchlistEntries">> {
+		await operator.mutation(api.watchlist.toggle, { channelId, form });
+		const { root, folders } = await operator.query(api.watchlist.list, {});
+		const all = [...root, ...folders.flatMap((f) => f.entries)];
+		const entry = all.find((e) => e.channelId === channelId && e.form === form);
+		if (entry === undefined) throw new Error("entry not found after save");
+		return entry.entryId;
+	}
+
+	it("creates a folder from the section header — an empty bucket in the list", async () => {
+		const { operator } = await setup();
+
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "faceless",
+		});
+
+		const { folders, root } = await operator.query(api.watchlist.list, {});
+		expect(root).toEqual([]);
+		expect(folders).toEqual([{ folderId, name: "faceless", entries: [] }]);
+	});
+
+	it("trims folder names and rejects empty ones", async () => {
+		const { operator } = await setup();
+
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "  next month  ",
+		});
+		const { folders } = await operator.query(api.watchlist.list, {});
+		expect(folders[0]).toMatchObject({ folderId, name: "next month" });
+
+		await expect(
+			operator.mutation(api.watchlist.createFolder, { name: "   " }),
+		).rejects.toThrow(/empty/i);
+	});
+
+	it("files an entry into a folder and un-files it back to root", async () => {
+		const { t, operator } = await setup();
+		const channelId = await t.run((ctx) => addChannel(ctx, "AI Horror"));
+		const entryId = await saveEntry(operator, channelId);
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "faceless",
+		});
+
+		// File it.
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId,
+			folderId,
+		});
+		let view = await operator.query(api.watchlist.list, {});
+		expect(view.root).toEqual([]);
+		expect(view.folders[0]?.entries.map((e) => e.entryId)).toEqual([entryId]);
+		expect(view.folders[0]?.entries[0]?.folderId).toEqual(folderId);
+
+		// Un-file it (folderId: null) — back to the root.
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId,
+			folderId: null,
+		});
+		view = await operator.query(api.watchlist.list, {});
+		expect(view.folders[0]?.entries).toEqual([]);
+		expect(view.root.map((e) => e.entryId)).toEqual([entryId]);
+		expect(view.root[0]?.folderId).toBeNull();
+	});
+
+	it("renames a folder", async () => {
+		const { operator } = await setup();
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "faceless",
+		});
+
+		await operator.mutation(api.watchlist.renameFolder, {
+			folderId,
+			name: "faceless AI",
+		});
+
+		const { folders } = await operator.query(api.watchlist.list, {});
+		expect(folders[0]).toMatchObject({ folderId, name: "faceless AI" });
+	});
+
+	it("deleting a folder reparents its entries to root — never deletes them", async () => {
+		const { t, operator } = await setup();
+		const a = await t.run((ctx) => addChannel(ctx, "Alpha"));
+		const b = await t.run((ctx) => addChannel(ctx, "Bravo"));
+		const entryA = await saveEntry(operator, a);
+		const entryB = await saveEntry(operator, b);
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "faceless",
+		});
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId: entryA,
+			folderId,
+		});
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId: entryB,
+			folderId,
+		});
+
+		await operator.mutation(api.watchlist.deleteFolder, { folderId });
+
+		const { folders, root } = await operator.query(api.watchlist.list, {});
+		expect(folders).toEqual([]);
+		// Both entries survive at the root, cleared of the deleted folder.
+		expect(new Set(root.map((e) => e.entryId))).toEqual(
+			new Set([entryA, entryB]),
+		);
+		expect(root.every((e) => e.folderId === null)).toBe(true);
+	});
+
+	it("orders folders alphabetically and entries newest-first within each folder and root", async () => {
+		const { t, operator } = await setup();
+		const zebra = await t.run((ctx) => addChannel(ctx, "Zebra"));
+		const apex = await t.run((ctx) => addChannel(ctx, "Apex"));
+		const rootOld = await t.run((ctx) => addChannel(ctx, "Root Old"));
+		const rootNew = await t.run((ctx) => addChannel(ctx, "Root New"));
+
+		// Two folders created out of alphabetical order.
+		const { folderId: workId } = await operator.mutation(
+			api.watchlist.createFolder,
+			{ name: "work" },
+		);
+		const { folderId: brandId } = await operator.mutation(
+			api.watchlist.createFolder,
+			{ name: "brand" },
+		);
+
+		// Save order fixes newest-first: later saves sort first.
+		const zebraEntry = await saveEntry(operator, zebra);
+		const apexEntry = await saveEntry(operator, apex);
+		await saveEntry(operator, rootOld);
+		await saveEntry(operator, rootNew);
+
+		// File both channels into the same "brand" folder; apex was saved last.
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId: zebraEntry,
+			folderId: brandId,
+		});
+		await operator.mutation(api.watchlist.setEntryFolder, {
+			entryId: apexEntry,
+			folderId: brandId,
+		});
+
+		const { folders, root } = await operator.query(api.watchlist.list, {});
+		// Folders alphabetical: "brand" before "work".
+		expect(folders.map((f) => f.name)).toEqual(["brand", "work"]);
+		expect(folders[0]?.folderId).toEqual(brandId);
+		expect(folders[1]?.folderId).toEqual(workId);
+		// Within "brand": apex (saved later) is newest-first.
+		expect(folders[0]?.entries.map((e) => e.channel.title)).toEqual([
+			"Apex",
+			"Zebra",
+		]);
+		// Root keeps its own newest-first order, folder members excluded.
+		expect(root.map((e) => e.channel.title)).toEqual(["Root New", "Root Old"]);
+	});
+
+	it("keeps folders and filing private per Operator", async () => {
+		const { t, operator } = await setup();
+		const rival = await asSubscribedOperator(t, "rival");
+		const channelId = await t.run((ctx) => addChannel(ctx, "Contested"));
+		const rivalEntry = await saveEntry(rival, channelId);
+
+		const { folderId } = await operator.mutation(api.watchlist.createFolder, {
+			name: "mine",
+		});
+
+		// The rival never sees the Operator's folder.
+		expect((await rival.query(api.watchlist.list, {})).folders).toEqual([]);
+
+		// Cross-Operator mutations are rejected: the rival can't touch the folder…
+		await expect(
+			rival.mutation(api.watchlist.renameFolder, { folderId, name: "hijack" }),
+		).rejects.toThrow(/folder/i);
+		await expect(
+			rival.mutation(api.watchlist.deleteFolder, { folderId }),
+		).rejects.toThrow(/folder/i);
+		// …and the Operator can't file the rival's entry into their folder.
+		await expect(
+			operator.mutation(api.watchlist.setEntryFolder, {
+				entryId: rivalEntry,
+				folderId,
+			}),
+		).rejects.toThrow(/entry/i);
+		// …nor file their own entry into a folder they don't own.
+		const own = await t.run((ctx) => addChannel(ctx, "Own"));
+		const ownEntry = await saveEntry(operator, own);
+		const rivalFolder = await rival.mutation(api.watchlist.createFolder, {
+			name: "rival",
+		});
+		await expect(
+			operator.mutation(api.watchlist.setEntryFolder, {
+				entryId: ownEntry,
+				folderId: rivalFolder.folderId,
+			}),
+		).rejects.toThrow(/folder/i);
+	});
+
+	it("requires authentication for every folder function", async () => {
+		const t = createGatedTest();
+		const { entryId, folderId } = await t.run(async (ctx) => {
+			const channelId = await addChannel(ctx, "Locked");
+			const entryId = await ctx.db.insert("watchlistEntries", {
+				operatorId: "someone",
+				channelId,
+				form: "short",
+			});
+			const folderId = await ctx.db.insert("watchlistFolders", {
+				operatorId: "someone",
+				name: "locked",
+			});
+			return { entryId, folderId };
+		});
+
+		await expect(
+			t.mutation(api.watchlist.createFolder, { name: "x" }),
+		).rejects.toThrow(/authenticated/i);
+		await expect(
+			t.mutation(api.watchlist.renameFolder, { folderId, name: "x" }),
+		).rejects.toThrow(/authenticated/i);
+		await expect(
+			t.mutation(api.watchlist.deleteFolder, { folderId }),
+		).rejects.toThrow(/authenticated/i);
+		await expect(
+			t.mutation(api.watchlist.setEntryFolder, { entryId, folderId }),
 		).rejects.toThrow(/authenticated/i);
 	});
 });

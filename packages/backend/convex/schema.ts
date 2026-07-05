@@ -99,10 +99,13 @@ export default defineSchema({
 	// triple (ADR-0004). Never a listing id — Listings are deleted/reinserted on
 	// recompute (ADR-0002), so entries re-derive live Listing data at read time.
 	// `operatorId` is the better-auth user id. Newest-first uses `_creationTime`.
+	// `folderId` files the entry into one of the Operator's Folders (CONTEXT.md);
+	// absent means the entry sits at the Watchlist root.
 	watchlistEntries: defineTable({
 		operatorId: v.string(),
 		channelId: v.id("channels"),
 		form: formValidator,
+		folderId: v.optional(v.id("watchlistFolders")),
 	})
 		// Point lookup for toggle/dedupe on the exact triple; its `operatorId`
 		// prefix also serves the per-operator list (ordered by the remaining
@@ -112,7 +115,19 @@ export default defineSchema({
 			"channelId",
 			"form",
 		])
-		.index("by_operator", ["operatorId"]),
+		.index("by_operator", ["operatorId"])
+		// Serves delete-a-Folder reparenting: find every entry filed under it.
+		.index("by_folder", ["folderId"]),
+
+	// The Operator's flat, private Folders inside the Watchlist (CONTEXT.md): a
+	// named bucket entries are filed into via `watchlistEntries.folderId`. No
+	// nesting; an entry sits in at most one Folder or at the root. Deleting a
+	// Folder reparents its entries to root — it never deletes them. Folders group,
+	// they don't rank: the drawer sorts them alphabetically by `name`.
+	watchlistFolders: defineTable({
+		operatorId: v.string(),
+		name: v.string(),
+	}).index("by_operator", ["operatorId"]),
 
 	// The snowball graph (CONTEXT.md): a directed edge means `toChannelId` surfaced
 	// as related/featured off `fromChannelId` during snowball discovery. Its purpose
