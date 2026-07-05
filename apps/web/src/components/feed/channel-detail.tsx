@@ -232,7 +232,7 @@ function DetailBody({
 	onToggleSave: (selection: WatchlistSelection) => void;
 }) {
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex min-w-0 flex-col gap-4">
 			<DetailHeader detail={detail} saved={saved} onToggleSave={onToggleSave} />
 			{detail.channel.description ? (
 				<p className="text-muted-foreground text-xs">
@@ -301,7 +301,7 @@ export function ChannelDetailDialog({
 		>
 			<DialogContent
 				showCloseButton={false}
-				className="max-h-[85vh] max-w-xl overflow-y-auto"
+				className="max-h-[85vh] max-w-2xl overflow-y-auto overflow-x-hidden"
 			>
 				{selection === null ? null : detail === undefined ? (
 					<>

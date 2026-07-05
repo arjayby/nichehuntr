@@ -161,10 +161,13 @@ function SignalScores({ card }: { card: FeedCard }) {
 		return null;
 	}
 	return (
-		<div className="mt-3 flex flex-col gap-1 border-t pt-2">
+		<div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t pt-2">
 			{tops.map((signal) => (
-				<div key={signal.name} className="flex items-baseline gap-1.5 text-xs">
-					<span className="shrink-0 font-medium text-foreground">
+				<div
+					key={signal.name}
+					className="flex min-w-0 items-baseline gap-1.5 text-xs"
+				>
+					<span className="truncate font-medium text-foreground">
 						{signal.label}
 					</span>
 					<span className="shrink-0 text-muted-foreground tabular-nums">
