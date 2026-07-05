@@ -13,10 +13,18 @@ import {
 } from "@nichehuntr/ui/components/card";
 import { Bookmark, ExternalLink, Minus, TrendingUp, Users } from "lucide-react";
 
-const compactViews = new Intl.NumberFormat("en", {
+/** Compact view-count formatter shared by Feed cards and the detail pane. */
+export const compactViews = new Intl.NumberFormat("en", {
 	notation: "compact",
 	maximumFractionDigits: 1,
 });
+
+/** Human labels for the lifecycle columns, shared by the Feed and the detail pane. */
+export const STAGE_LABELS: Record<FeedCard["stage"], string> = {
+	emerging: "Emerging",
+	breaking_out: "Breaking Out",
+	established: "Established",
+};
 
 const momentumPct = new Intl.NumberFormat("en", {
 	style: "percent",
@@ -29,7 +37,7 @@ const momentumPct = new Intl.NumberFormat("en", {
  * (Breaking Out territory) reads as a filled brand pill; a still-accelerating
  * listing as plain foreground; a flat/cooled one as a muted dash.
  */
-function MomentumIndicator({ momentum }: { momentum: number | null }) {
+export function MomentumIndicator({ momentum }: { momentum: number | null }) {
 	if (momentum === null) {
 		return (
 			<span className="text-muted-foreground text-xs" title="Momentum pending">
@@ -74,7 +82,7 @@ function MomentumIndicator({ momentum }: { momentum: number | null }) {
  * high band reads as a caution — while a sparse one is neutral. Null until the
  * embed cron measures it.
  */
-function SaturationRead({ saturation }: { saturation: number | null }) {
+export function SaturationRead({ saturation }: { saturation: number | null }) {
 	if (saturation === null) {
 		return (
 			<div className="text-center">
@@ -118,19 +126,23 @@ function SaturationRead({ saturation }: { saturation: number | null }) {
  * It's the within-column sort key, so it reads as the card's headline number. A
  * dash until the enrich cron scores the Listing — Clonability never gates (ADR-0003).
  */
-function ClonabilityRead({ card }: { card: FeedCard }) {
+export function ClonabilityRead({
+	clonability,
+}: {
+	clonability: number | null;
+}) {
 	return (
 		<div className="text-right">
 			<div className="text-muted-foreground text-xs">Clonability</div>
 			<div
 				className="font-semibold text-lg tabular-nums"
 				title={
-					card.clonability === null
+					clonability === null
 						? "Clonability pending"
 						: "Weighted mean of this form's signals"
 				}
 			>
-				{card.clonability ?? "—"}
+				{clonability ?? "—"}
 			</div>
 		</div>
 	);
@@ -188,7 +200,7 @@ export function initials(title: string): string {
 }
 
 /** Link straight to the real channel on YouTube — prefer the handle when known. */
-function channelUrl(channel: FeedCard["channel"]): string {
+export function channelUrl(channel: FeedCard["channel"]): string {
 	return channel.handle
 		? `https://www.youtube.com/@${channel.handle}`
 		: `https://www.youtube.com/channel/${channel.ytId}`;
@@ -273,7 +285,7 @@ export function ListingCard({
 							</div>
 						</div>
 						<SaturationRead saturation={card.saturation} />
-						<ClonabilityRead card={card} />
+						<ClonabilityRead clonability={card.clonability} />
 						<ExternalLink className="size-4 self-center text-muted-foreground" />
 					</div>
 					<SignalRationales card={card} />

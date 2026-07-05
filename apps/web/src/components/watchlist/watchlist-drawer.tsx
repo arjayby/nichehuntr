@@ -1,12 +1,41 @@
-import type { WatchlistEntry } from "@nichehuntr/backend/convex/watchlist";
+import { api } from "@nichehuntr/backend/convex/_generated/api";
+import type {
+	WatchlistEntry,
+	WatchlistSelection,
+} from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
+import {
+	browserLayoutStorage,
+	ResizableHandle,
+	ResizablePanel,
+	ResizablePanelGroup,
+	useDefaultLayout,
+} from "@nichehuntr/ui/components/resizable";
+import { useQuery } from "convex/react";
 import { Bookmark, PanelRightClose, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
+import {
+	DetailHint,
+	WatchlistDetailPane,
+} from "@/components/watchlist/watchlist-detail";
+import { cn } from "@/lib/utils";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
+const SPLIT_LAYOUT_ID = "nichehuntr.watchlist-drawer.split";
+
+/** Two entries share one identity when they point at the same (channel, form)
+ * pair — the entry identity of ADR-0004. */
+export function sameSelection(
+	a: WatchlistSelection | null,
+	b: WatchlistSelection | null,
+): boolean {
+	return (
+		a !== null && b !== null && a.channelId === b.channelId && a.form === b.form
+	);
+}
 
 /**
  * The desktop drawer's open state, persisted in localStorage. Open by default;
@@ -31,30 +60,61 @@ export function useWatchlistDrawerOpen() {
 	return { open, setOpen: setAndPersist };
 }
 
-function WatchlistRow({ entry }: { entry: WatchlistEntry }) {
+function WatchlistRow({
+	entry,
+	selected,
+	onSelect,
+}: {
+	entry: WatchlistEntry;
+	selected: boolean;
+	onSelect: (selection: WatchlistSelection) => void;
+}) {
 	return (
-		<li className="flex items-center gap-3 rounded-2xl border border-border px-3 py-2">
-			{entry.channel.avatarUrl ? (
-				<img
-					src={entry.channel.avatarUrl}
-					alt={`${entry.channel.title} avatar`}
-					className="size-8 shrink-0 rounded-full object-cover"
-				/>
-			) : (
-				<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
-					{initials(entry.channel.title)}
-				</div>
-			)}
-			<span className="min-w-0 flex-1 truncate font-medium text-sm">
-				{entry.channel.title}
-			</span>
-			<FormBadge form={entry.form} />
+		<li>
+			<button
+				type="button"
+				aria-current={selected}
+				onClick={() =>
+					onSelect({ channelId: entry.channelId, form: entry.form })
+				}
+				className={cn(
+					"flex w-full items-center gap-3 rounded-2xl border border-border px-3 py-2 text-left transition-colors hover:bg-accent",
+					selected && "border-foreground/30 bg-accent",
+					// Off the Feed: muted but still selectable — the detail pane
+					// explains why (ADR-0004: the entry outlives the Listing).
+					!entry.onFeed && "opacity-60",
+				)}
+			>
+				{entry.channel.avatarUrl ? (
+					<img
+						src={entry.channel.avatarUrl}
+						alt={`${entry.channel.title} avatar`}
+						className="size-8 shrink-0 rounded-full object-cover"
+					/>
+				) : (
+					<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
+						{initials(entry.channel.title)}
+					</div>
+				)}
+				<span className="min-w-0 flex-1 truncate font-medium text-sm">
+					{entry.channel.title}
+				</span>
+				<FormBadge form={entry.form} />
+			</button>
 		</li>
 	);
 }
 
-/** The drawer's body: the Operator's whole Watchlist, newest-first, flat. */
-function WatchlistBody({ entries }: { entries: WatchlistEntry[] | undefined }) {
+/** The drawer's list section: the Operator's whole Watchlist, newest-first, flat. */
+function WatchlistBody({
+	entries,
+	selection,
+	onSelect,
+}: {
+	entries: WatchlistEntry[] | undefined;
+	selection: WatchlistSelection | null;
+	onSelect: (selection: WatchlistSelection) => void;
+}) {
 	if (entries === undefined) {
 		return <Loader />;
 	}
@@ -70,9 +130,73 @@ function WatchlistBody({ entries }: { entries: WatchlistEntry[] | undefined }) {
 	return (
 		<ul className="flex flex-col gap-2">
 			{entries.map((entry) => (
-				<WatchlistRow key={entry.entryId} entry={entry} />
+				<WatchlistRow
+					key={entry.entryId}
+					entry={entry}
+					selected={sameSelection(selection, entry)}
+					onSelect={onSelect}
+				/>
 			))}
 		</ul>
+	);
+}
+
+/**
+ * The list/detail split: a vertical resizable group favoring the list (~55/45),
+ * with a 25% floor per section so neither can be crushed. The ratio persists
+ * via the library's own layout storage; drag and arrow-key resize are built in.
+ */
+function WatchlistPanels({
+	entries,
+	selection,
+	onSelect,
+}: {
+	entries: WatchlistEntry[] | undefined;
+	selection: WatchlistSelection | null;
+	onSelect: (selection: WatchlistSelection) => void;
+}) {
+	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+		id: SPLIT_LAYOUT_ID,
+		storage: browserLayoutStorage,
+		onlySaveAfterUserInteractions: true,
+	});
+	const detail = useQuery(api.watchlist.detail, selection ?? "skip");
+
+	return (
+		<ResizablePanelGroup
+			orientation="vertical"
+			className="min-h-0 flex-1"
+			defaultLayout={defaultLayout}
+			onLayoutChanged={onLayoutChanged}
+		>
+			{/* Percent strings, not bare numbers: the library reads numbers as px. */}
+			<ResizablePanel id="list" defaultSize="55%" minSize="25%">
+				<div className="h-full overflow-y-auto p-3">
+					<WatchlistBody
+						entries={entries}
+						selection={selection}
+						onSelect={onSelect}
+					/>
+				</div>
+			</ResizablePanel>
+			{/* Amplified so it reads as draggable: a tall grab zone with an
+			    always-visible grip pill and a strip highlight on hover/drag.
+			    The resize cursor and arrow-key handling come from the library. */}
+			<ResizableHandle
+				withHandle
+				aria-label="Resize Watchlist sections"
+				className="transition-colors after:transition-colors hover:after:bg-accent focus-visible:after:bg-accent active:after:bg-accent aria-[orientation=horizontal]:after:h-3"
+			/>
+			<ResizablePanel id="detail" defaultSize="45%" minSize="25%">
+				<div className="h-full overflow-y-auto p-3">
+					{selection === null ? (
+						<DetailHint />
+					) : (
+						<WatchlistDetailPane detail={detail} />
+					)}
+				</div>
+			</ResizablePanel>
+		</ResizablePanelGroup>
 	);
 }
 
@@ -116,9 +240,13 @@ function WatchlistHeader({
  */
 export function WatchlistDrawer({
 	entries,
+	selection,
+	onSelect,
 	onCollapse,
 }: {
 	entries: WatchlistEntry[] | undefined;
+	selection: WatchlistSelection | null;
+	onSelect: (selection: WatchlistSelection) => void;
 	onCollapse: () => void;
 }) {
 	return (
@@ -129,9 +257,11 @@ export function WatchlistDrawer({
 				closeIcon={<PanelRightClose className="size-4" />}
 				closeLabel="Collapse Watchlist"
 			/>
-			<div className="min-h-0 flex-1 overflow-y-auto p-3">
-				<WatchlistBody entries={entries} />
-			</div>
+			<WatchlistPanels
+				entries={entries}
+				selection={selection}
+				onSelect={onSelect}
+			/>
 		</aside>
 	);
 }
@@ -139,10 +269,14 @@ export function WatchlistDrawer({
 /** The below-`lg` fallback: the same Watchlist as a toggleable overlay sheet. */
 export function WatchlistSheet({
 	entries,
+	selection,
+	onSelect,
 	open,
 	onClose,
 }: {
 	entries: WatchlistEntry[] | undefined;
+	selection: WatchlistSelection | null;
+	onSelect: (selection: WatchlistSelection) => void;
 	open: boolean;
 	onClose: () => void;
 }) {
@@ -188,9 +322,11 @@ export function WatchlistSheet({
 					closeIcon={<X className="size-4" />}
 					closeLabel="Close Watchlist"
 				/>
-				<div className="min-h-0 flex-1 overflow-y-auto p-3">
-					<WatchlistBody entries={entries} />
-				</div>
+				<WatchlistPanels
+					entries={entries}
+					selection={selection}
+					onSelect={onSelect}
+				/>
 			</div>
 		</div>
 	);
