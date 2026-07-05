@@ -1,5 +1,6 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import type { FeedCard, FeedGroup } from "@nichehuntr/backend/convex/feed";
+import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
@@ -7,9 +8,10 @@ import { Bookmark } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { ListingCard } from "@/components/feed/listing-card";
+import { ListingCard, STAGE_LABELS } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import {
+	sameSelection,
 	useWatchlistDrawerOpen,
 	WatchlistDrawer,
 	WatchlistSheet,
@@ -21,12 +23,6 @@ export const Route = createFileRoute("/_auth/_subscribed/feed")({
 
 type Form = "short" | "long";
 type Stage = FeedGroup["stage"];
-
-const STAGE_LABELS: Record<Stage, string> = {
-	emerging: "Emerging",
-	breaking_out: "Breaking Out",
-	established: "Established",
-};
 
 /** The saved-state key the Feed paints on cards: the entry's channel + form. */
 function savedKey(channelId: string, form: Form): string {
@@ -48,10 +44,25 @@ function FeedPage() {
 			),
 		[watchlist],
 	);
+	// Which entry the drawer's detail pane shows — session state only, keyed by
+	// the entry identity (channel, form) (ADR-0004). Nothing selected initially.
+	const [selection, setSelection] = useState<WatchlistSelection | null>(null);
 	const handleToggleSave = (card: FeedCard) => {
-		toggleSave({ channelId: card.channelId, form: card.form }).catch(() => {
-			toast.error("Could not update your Watchlist.");
-		});
+		const key: WatchlistSelection = {
+			channelId: card.channelId,
+			form: card.form,
+		};
+		toggleSave(key)
+			.then(({ saved }) => {
+				// Saving a card auto-selects its new entry; unsaving the selected
+				// entry clears the pane back to the hint.
+				setSelection((current) =>
+					saved ? key : sameSelection(current, key) ? null : current,
+				);
+			})
+			.catch(() => {
+				toast.error("Could not update your Watchlist.");
+			});
 	};
 
 	const drawer = useWatchlistDrawerOpen();
@@ -130,11 +141,15 @@ function FeedPage() {
 			{drawer.open ? (
 				<WatchlistDrawer
 					entries={watchlist}
+					selection={selection}
+					onSelect={setSelection}
 					onCollapse={() => drawer.setOpen(false)}
 				/>
 			) : null}
 			<WatchlistSheet
 				entries={watchlist}
+				selection={selection}
+				onSelect={setSelection}
 				open={sheetOpen}
 				onClose={() => setSheetOpen(false)}
 			/>
