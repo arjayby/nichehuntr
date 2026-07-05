@@ -1,4 +1,5 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
+import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import {
 	SIGNAL_SETS,
 	topSignals,
@@ -15,12 +16,14 @@ import {
 	DialogDescription,
 	DialogTitle,
 } from "@nichehuntr/ui/components/dialog";
+import { Skeleton } from "@nichehuntr/ui/components/skeleton";
 import { useQuery } from "convex/react";
 import { AlertCircle, Bookmark, ExternalLink, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import {
-	channelUrl,
 	ClonabilityRead,
+	channelUrl,
 	compactViews,
 	FormBadge,
 	initials,
@@ -28,9 +31,37 @@ import {
 	SaturationRead,
 	STAGE_LABELS,
 } from "@/components/feed/listing-card";
-import Loader from "@/components/loader";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The identity we can paint the instant the modal opens — the (channel, form)
+ * plus the channel's name/avatar/handle we already held on the clicked card or
+ * saved row. It seeds the header so the modal never opens on a bare spinner; the
+ * scored body skeletons in until `watchlist.detail` resolves. Deep-links have no
+ * seed (nothing was clicked), so the header skeletons too. Shape is a subset of
+ * both `FeedCard` and `WatchlistEntry`, so either can produce one directly.
+ */
+export type ChannelDetailSeed = {
+	channelId: Id<"channels">;
+	form: WatchlistDetail["form"];
+	channel: {
+		ytId: string;
+		title: string;
+		handle: string | null;
+		avatarUrl: string | null;
+	};
+};
+
+/** The resolved detail carries the same identity fields as a seed, so the header
+ * renders off one shape whether it's painting the seed or the live detail. */
+function identityFromDetail(detail: WatchlistDetail): ChannelDetailSeed {
+	return {
+		channelId: detail.channelId,
+		form: detail.form,
+		channel: detail.channel,
+	};
+}
 
 /** Coarse upload age for the strip, e.g. "3d", "2w", "5mo", "1y". */
 export function uploadAge(publishedAt: number, now = Date.now()): string {
@@ -126,13 +157,14 @@ function SignalBreakdown({
 
 /** The modal's top-right control cluster: save toggle, open-on-YouTube, close —
  * mirroring the Feed card's own [bookmark][external-link] pair, with the dialog's
- * dismiss folded onto the end. */
+ * dismiss folded onto the end. Driven by the identity (seed or live detail), so
+ * it's live from the instant the modal opens. */
 function DetailControls({
-	detail,
+	identity,
 	saved,
 	onToggleSave,
 }: {
-	detail: WatchlistDetail;
+	identity: ChannelDetailSeed;
 	saved: boolean;
 	onToggleSave: (selection: WatchlistSelection) => void;
 }) {
@@ -144,18 +176,16 @@ function DetailControls({
 				aria-label={saved ? "Remove from Watchlist" : "Save to Watchlist"}
 				title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
 				onClick={() =>
-					onToggleSave({ channelId: detail.channelId, form: detail.form })
+					onToggleSave({ channelId: identity.channelId, form: identity.form })
 				}
 				className={`rounded-md p-1.5 transition-colors ${
-					saved
-						? "text-primary"
-						: "text-muted-foreground hover:text-foreground"
+					saved ? "text-primary" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
 				<Bookmark className={`size-4 ${saved ? "fill-current" : ""}`} />
 			</button>
 			<a
-				href={channelUrl(detail.channel)}
+				href={channelUrl(identity.channel)}
 				target="_blank"
 				rel="noreferrer"
 				aria-label="Open channel on YouTube"
@@ -175,65 +205,130 @@ function DetailControls({
 }
 
 /** Identity row for the detail: avatar, title + form badge, and the channel
- * handle. The save / external / close controls ride at the far right. */
+ * handle. The save / external / close controls ride at the far right. Paints
+ * from the seed the instant the modal opens, then from the live detail. */
 function DetailHeader({
-	detail,
+	identity,
 	saved,
 	onToggleSave,
 }: {
-	detail: WatchlistDetail;
+	identity: ChannelDetailSeed;
 	saved: boolean;
 	onToggleSave: (selection: WatchlistSelection) => void;
 }) {
 	return (
 		<header className="flex items-start gap-3">
-			{detail.channel.avatarUrl ? (
+			{identity.channel.avatarUrl ? (
 				<img
-					src={detail.channel.avatarUrl}
-					alt={`${detail.channel.title} avatar`}
+					src={identity.channel.avatarUrl}
+					alt={`${identity.channel.title} avatar`}
 					className="size-10 shrink-0 rounded-full object-cover"
 				/>
 			) : (
 				<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground text-xs">
-					{initials(detail.channel.title)}
+					{initials(identity.channel.title)}
 				</div>
 			)}
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-1.5">
 					<DialogTitle className="truncate text-sm">
-						{detail.channel.title}
+						{identity.channel.title}
 					</DialogTitle>
-					<FormBadge form={detail.form} />
+					<FormBadge form={identity.form} />
 				</div>
 				<DialogDescription className="text-xs">
-					{detail.channel.handle
-						? `@${detail.channel.handle}`
+					{identity.channel.handle
+						? `@${identity.channel.handle}`
 						: "Channel detail"}
 				</DialogDescription>
 			</div>
-			<DetailControls detail={detail} saved={saved} onToggleSave={onToggleSave} />
+			<DetailControls
+				identity={identity}
+				saved={saved}
+				onToggleSave={onToggleSave}
+			/>
 		</header>
 	);
 }
 
-/**
- * The detail body for a resolved (channel, form). The Listing half is re-derived
- * live (ADR-0004): when the pair is off the Feed the pane degrades to identity +
- * uploads with an explicit notice — a product state, not an error — since the
- * videos persist even when the Listing doesn't.
- */
-function DetailBody({
-	detail,
-	saved,
-	onToggleSave,
-}: {
-	detail: WatchlistDetail;
-	saved: boolean;
-	onToggleSave: (selection: WatchlistSelection) => void;
-}) {
+/** The header with no identity yet — a deep-link or refresh that opened the modal
+ * without a clicked card in hand. Avatar/title/handle skeleton in; only the close
+ * control is live (save / external need the resolved channel). */
+function DetailHeaderSkeleton() {
 	return (
-		<div className="flex min-w-0 flex-col gap-4">
-			<DetailHeader detail={detail} saved={saved} onToggleSave={onToggleSave} />
+		<header className="flex items-start gap-3">
+			<DialogTitle className="sr-only">Channel detail</DialogTitle>
+			<Skeleton className="size-10 shrink-0 rounded-full" />
+			<div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-1">
+				<Skeleton className="h-4 w-40 max-w-full" />
+				<Skeleton className="h-3 w-24 max-w-full" />
+			</div>
+			<DialogClose
+				aria-label="Close"
+				className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<X className="size-4" />
+			</DialogClose>
+		</header>
+	);
+}
+
+/** The scored half of the detail — everything below the identity header — while
+ * `watchlist.detail` is still in flight. Mirrors the resolved layout (stage +
+ * momentum, the medians/saturation/clonability row, signals, uploads strip) so
+ * the swap-in doesn't reflow. */
+function DetailBodySkeleton() {
+	return (
+		<>
+			<div className="flex flex-col gap-1.5">
+				<Skeleton className="h-3 w-full" />
+				<Skeleton className="h-3 w-4/5" />
+			</div>
+			<div className="flex items-center gap-2">
+				<Skeleton className="h-6 w-24 rounded-full" />
+				<Skeleton className="h-4 w-16" />
+			</div>
+			<div className="flex items-end justify-between gap-3">
+				<div className="flex flex-col gap-1">
+					<Skeleton className="h-3 w-20" />
+					<Skeleton className="h-6 w-16" />
+				</div>
+				<Skeleton className="h-9 w-16" />
+				<Skeleton className="h-9 w-16" />
+			</div>
+			<div className="flex flex-col gap-2">
+				{[0, 1, 2].map((row) => (
+					<div key={row} className="flex flex-col gap-1">
+						<Skeleton className="h-3 w-32" />
+						<Skeleton className="h-3 w-full" />
+					</div>
+				))}
+			</div>
+			<section>
+				<Skeleton className="mb-2 h-3 w-24" />
+				<div className="flex gap-2 overflow-hidden">
+					{[0, 1, 2, 3].map((tile) => (
+						<div key={tile} className="flex w-32 shrink-0 flex-col gap-1">
+							<Skeleton className="aspect-video w-full rounded-md" />
+							<Skeleton className="h-3 w-full" />
+							<Skeleton className="h-3 w-2/3" />
+						</div>
+					))}
+				</div>
+			</section>
+		</>
+	);
+}
+
+/**
+ * The resolved detail body below the header (ADR-0004): the Listing half is
+ * re-derived live, so when the pair is off the Feed the pane degrades to just the
+ * description + uploads with an explicit notice — a product state, not an error —
+ * since the videos persist even when the Listing doesn't.
+ */
+function DetailBodyContent({ detail }: { detail: WatchlistDetail }) {
+	return (
+		<>
 			{detail.channel.description ? (
 				<p className="text-muted-foreground text-xs">
 					{detail.channel.description}
@@ -266,6 +361,65 @@ function DetailBody({
 				</p>
 			)}
 			<UploadsStrip uploads={detail.uploads} />
+		</>
+	);
+}
+
+/** The "this channel record is gone" terminal state (detail resolved to null),
+ * distinct from the off-Feed degrade handled inside DetailBodyContent. */
+function ChannelUnavailable() {
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-start justify-between gap-3">
+				<DialogTitle className="text-sm">Channel unavailable</DialogTitle>
+				<DialogClose
+					aria-label="Close"
+					className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<X className="size-4" />
+				</DialogClose>
+			</div>
+			<DialogDescription className="text-xs">
+				This channel is no longer available.
+			</DialogDescription>
+		</div>
+	);
+}
+
+/** The content shown for one open (or closing) detail: header first — from the
+ * seed or the live detail, else a skeleton — then the scored body, skeletoned
+ * until the query resolves. `detail === null` is the channel-gone terminal. */
+function DetailContent({
+	seed,
+	detail,
+	saved,
+	onToggleSave,
+}: {
+	seed: ChannelDetailSeed | null;
+	detail: WatchlistDetail | null | undefined;
+	saved: boolean;
+	onToggleSave: (selection: WatchlistSelection) => void;
+}) {
+	if (detail === null) {
+		return <ChannelUnavailable />;
+	}
+	const identity = detail !== undefined ? identityFromDetail(detail) : seed;
+	return (
+		<div className="flex min-w-0 flex-col gap-4">
+			{identity ? (
+				<DetailHeader
+					identity={identity}
+					saved={saved}
+					onToggleSave={onToggleSave}
+				/>
+			) : (
+				<DetailHeaderSkeleton />
+			)}
+			{detail === undefined ? (
+				<DetailBodySkeleton />
+			) : (
+				<DetailBodyContent detail={detail} />
+			)}
 		</div>
 	);
 }
@@ -276,19 +430,44 @@ function DetailBody({
  * the detail is deep-linkable and the browser Back button closes it. Powered by
  * `watchlist.detail`, which resolves for any (channel, form) — saved or not — so
  * the modal works straight off an unsaved Feed card.
+ *
+ * Opens instantly: the caller's `seed` paints the header on the first frame while
+ * the query loads, and the body skeletons in. Closing keeps the last-shown
+ * content mounted through the exit animation (see `snapshot`) — the URL clears
+ * the moment we close, so without the snapshot the body would blank out and a
+ * bare box would animate away.
  */
 export function ChannelDetailDialog({
 	selection,
+	seed,
 	saved,
 	onToggleSave,
 	onClose,
 }: {
 	selection: WatchlistSelection | null;
+	seed: ChannelDetailSeed | null;
 	saved: boolean;
 	onToggleSave: (selection: WatchlistSelection) => void;
 	onClose: () => void;
 }) {
 	const detail = useQuery(api.watchlist.detail, selection ?? "skip");
+
+	// Retain the last-shown content so the closing animation runs over the real
+	// detail, not an empty box. `selection`/`seed` must be referentially stable
+	// across renders (the caller memoizes them) or this effect would loop.
+	const [snapshot, setSnapshot] = useState<{
+		seed: ChannelDetailSeed | null;
+		detail: WatchlistDetail | null | undefined;
+		saved: boolean;
+	} | null>(null);
+	useEffect(() => {
+		if (selection !== null) {
+			setSnapshot({ seed, detail, saved });
+		}
+	}, [selection, seed, detail, saved]);
+
+	// Live while open; the retained snapshot while the close animation plays out.
+	const shown = selection !== null ? { seed, detail, saved } : snapshot;
 
 	return (
 		<Dialog
@@ -303,30 +482,13 @@ export function ChannelDetailDialog({
 				showCloseButton={false}
 				className="max-h-[85vh] max-w-2xl overflow-y-auto overflow-x-hidden"
 			>
-				{selection === null ? null : detail === undefined ? (
-					<>
-						<DialogTitle className="sr-only">Channel detail</DialogTitle>
-						<Loader />
-					</>
-				) : detail === null ? (
-					<div className="flex flex-col gap-2">
-						<div className="flex items-start justify-between gap-3">
-							<DialogTitle className="text-sm">Channel unavailable</DialogTitle>
-							<DialogClose
-								aria-label="Close"
-								className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-							>
-								<X className="size-4" />
-							</DialogClose>
-						</div>
-						<DialogDescription className="text-xs">
-							This channel is no longer available.
-						</DialogDescription>
-					</div>
+				{shown === null ? (
+					<DialogTitle className="sr-only">Channel detail</DialogTitle>
 				) : (
-					<DetailBody
-						detail={detail}
-						saved={saved}
+					<DetailContent
+						seed={shown.seed}
+						detail={shown.detail}
+						saved={shown.saved}
 						onToggleSave={onToggleSave}
 					/>
 				)}
