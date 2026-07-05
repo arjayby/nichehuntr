@@ -1,6 +1,9 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import type { FeedCard, FeedGroup } from "@nichehuntr/backend/convex/feed";
-import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
+import type {
+	WatchlistEntry,
+	WatchlistSelection,
+} from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
@@ -34,16 +37,20 @@ function FeedPage() {
 	const groups = useQuery(api.feed.feed, { form });
 
 	// The whole Watchlist, independent of the form lens: it feeds the drawer
-	// and the saved-state keys painted on cards under both toggles.
-	const watchlist = useQuery(api.watchlist.entries);
+	// (Folders + root entries) and the saved-state keys painted on cards under
+	// both toggles. The keys flatten across every Folder and the root.
+	const watchlist = useQuery(api.watchlist.list);
 	const toggleSave = useMutation(api.watchlist.toggle);
-	const savedKeys = useMemo(
-		() =>
-			new Set(
-				(watchlist ?? []).map((entry) => savedKey(entry.channelId, entry.form)),
-			),
-		[watchlist],
-	);
+	const savedKeys = useMemo(() => {
+		if (watchlist === undefined) {
+			return new Set<string>();
+		}
+		const all = [
+			...watchlist.root,
+			...watchlist.folders.flatMap((folder) => folder.entries),
+		];
+		return new Set(all.map((entry) => savedKey(entry.channelId, entry.form)));
+	}, [watchlist]);
 	// Which entry the drawer's detail pane shows — session state only, keyed by
 	// the entry identity (channel, form) (ADR-0004). Nothing selected initially.
 	const [selection, setSelection] = useState<WatchlistSelection | null>(null);
@@ -58,6 +65,25 @@ function FeedPage() {
 				// entry clears the pane back to the hint.
 				setSelection((current) =>
 					saved ? key : sameSelection(current, key) ? null : current,
+				);
+			})
+			.catch(() => {
+				toast.error("Could not update your Watchlist.");
+			});
+	};
+	// Removing an entry from the drawer is the same unsave as the card bookmark:
+	// toggle the (channel, form) off and clear the pane if it was showing it.
+	// Narrow to the pair — `toggle` validates its args strictly, so the entry's
+	// extra fields must not ride along.
+	const handleRemoveEntry = (entry: WatchlistEntry) => {
+		const key: WatchlistSelection = {
+			channelId: entry.channelId,
+			form: entry.form,
+		};
+		toggleSave(key)
+			.then(() => {
+				setSelection((current) =>
+					sameSelection(current, key) ? null : current,
 				);
 			})
 			.catch(() => {
@@ -140,16 +166,18 @@ function FeedPage() {
 
 			{drawer.open ? (
 				<WatchlistDrawer
-					entries={watchlist}
+					list={watchlist}
 					selection={selection}
 					onSelect={setSelection}
+					onRemove={handleRemoveEntry}
 					onCollapse={() => drawer.setOpen(false)}
 				/>
 			) : null}
 			<WatchlistSheet
-				entries={watchlist}
+				list={watchlist}
 				selection={selection}
 				onSelect={setSelection}
+				onRemove={handleRemoveEntry}
 				open={sheetOpen}
 				onClose={() => setSheetOpen(false)}
 			/>
