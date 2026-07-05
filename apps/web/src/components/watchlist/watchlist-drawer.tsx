@@ -20,14 +20,7 @@ import type {
 } from "@nichehuntr/backend/convex/watchlist";
 import { Button } from "@nichehuntr/ui/components/button";
 import { Input } from "@nichehuntr/ui/components/input";
-import {
-	browserLayoutStorage,
-	ResizableHandle,
-	ResizablePanel,
-	ResizablePanelGroup,
-	useDefaultLayout,
-} from "@nichehuntr/ui/components/resizable";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	Bookmark,
 	BookmarkX,
@@ -38,20 +31,16 @@ import {
 	PanelRightClose,
 	Pencil,
 	Trash2,
+	X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
-import {
-	DetailHint,
-	WatchlistDetailPane,
-} from "@/components/watchlist/watchlist-detail";
 import { cn } from "@/lib/utils";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
-const SPLIT_LAYOUT_ID = "nichehuntr.watchlist-drawer.split";
 const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
 
 /** The un-file target: dropping an entry here clears its Folder (back to root). */
@@ -732,11 +721,11 @@ function WatchlistBody({
 }
 
 /**
- * The list/detail split: a vertical resizable group favoring the list (~55/45),
- * with a 25% floor per section so neither can be crushed. The ratio persists
- * via the library's own layout storage; drag and arrow-key resize are built in.
+ * The drawer's scrollable list body. Selecting a row opens the channel-detail
+ * modal (owned by the Feed route via a URL search param) — the drawer itself is
+ * just the list now, no in-drawer detail pane.
  */
-function WatchlistPanels({
+function WatchlistScroll({
 	list,
 	selection,
 	onSelect,
@@ -747,49 +736,15 @@ function WatchlistPanels({
 	onSelect: (selection: WatchlistSelection) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
-	const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-		id: SPLIT_LAYOUT_ID,
-		storage: browserLayoutStorage,
-		onlySaveAfterUserInteractions: true,
-	});
-	const detail = useQuery(api.watchlist.detail, selection ?? "skip");
-
 	return (
-		<ResizablePanelGroup
-			orientation="vertical"
-			className="min-h-0 flex-1"
-			defaultLayout={defaultLayout}
-			onLayoutChanged={onLayoutChanged}
-		>
-			{/* Percent strings, not bare numbers: the library reads numbers as px. */}
-			<ResizablePanel id="list" defaultSize="55%" minSize="25%">
-				<div className="h-full overflow-y-auto p-3">
-					<WatchlistBody
-						list={list}
-						selection={selection}
-						onSelect={onSelect}
-						onRemove={onRemove}
-					/>
-				</div>
-			</ResizablePanel>
-			{/* Amplified so it reads as draggable: a tall grab zone with an
-			    always-visible grip pill and a strip highlight on hover/drag.
-			    The resize cursor and arrow-key handling come from the library. */}
-			<ResizableHandle
-				withHandle
-				aria-label="Resize Watchlist sections"
-				className="transition-colors after:transition-colors hover:after:bg-accent focus-visible:after:bg-accent active:after:bg-accent aria-[orientation=horizontal]:after:h-3"
+		<div className="min-h-0 flex-1 overflow-y-auto p-3">
+			<WatchlistBody
+				list={list}
+				selection={selection}
+				onSelect={onSelect}
+				onRemove={onRemove}
 			/>
-			<ResizablePanel id="detail" defaultSize="45%" minSize="25%">
-				<div className="h-full overflow-y-auto p-3">
-					{selection === null ? (
-						<DetailHint />
-					) : (
-						<WatchlistDetailPane detail={detail} />
-					)}
-				</div>
-			</ResizablePanel>
-		</ResizablePanelGroup>
+		</div>
 	);
 }
 
@@ -852,7 +807,7 @@ export function WatchlistDrawer({
 				closeIcon={<PanelRightClose className="size-4" />}
 				closeLabel="Collapse Watchlist"
 			/>
-			<WatchlistPanels
+			<WatchlistScroll
 				list={list}
 				selection={selection}
 				onSelect={onSelect}
@@ -920,7 +875,7 @@ export function WatchlistSheet({
 					closeIcon={<X className="size-4" />}
 					closeLabel="Close Watchlist"
 				/>
-				<WatchlistPanels
+				<WatchlistScroll
 					list={list}
 					selection={selection}
 					onSelect={onSelect}
