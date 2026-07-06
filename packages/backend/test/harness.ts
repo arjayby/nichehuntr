@@ -29,6 +29,12 @@ type AppTest = TestConvex<typeof schema>;
 /** The identity-scoped accessor `asSubscribedOperator` returns. */
 export type Operator = Awaited<ReturnType<typeof asSubscribedOperator>>;
 
+/** The email `seedAuthUser` derives from a name. Grant/revoke-by-email tests
+ * resolve a signed-up user by this address. */
+export function emailForOperator(name: string): string {
+	return `${name}@example.com`;
+}
+
 /** Register the auth-gate components. Call once right after `convexTest()`. */
 export function registerAuthComponents(t: AppTest): void {
 	t.registerComponent("betterAuth", betterAuthSchema, betterAuthModules);
@@ -60,7 +66,7 @@ async function seedAuthUser(t: AppTest, name: string) {
 			model: "user",
 			data: {
 				name,
-				email: `${name}@example.com`,
+				email: emailForOperator(name),
 				emailVerified: true,
 				createdAt: now,
 				updatedAt: now,
@@ -142,5 +148,23 @@ export async function asSubscribedOperator(t: AppTest, name?: string) {
 		name ?? `operator-${++operatorSeq}`,
 	);
 	await seedActiveSubscription(t, userId);
+	return t.withIdentity({ subject: userId, sessionId });
+}
+
+/**
+ * A signed-in Admin: seeds an auth user plus an `adminUsers` row and returns a
+ * test accessor whose calls pass `requireAdmin` (convex/admin.ts). Deliberately
+ * seeds NO subscription — admin is a separate axis (ADR-0005), so this identity
+ * doubles as proof that admin functions never require an active subscription.
+ * Each call yields a distinct Admin; pass a `name` for readable fixtures.
+ */
+export async function asAdmin(t: AppTest, name?: string) {
+	const { userId, sessionId } = await seedAuthUser(
+		t,
+		name ?? `admin-${++operatorSeq}`,
+	);
+	await t.run(async (ctx) => {
+		await ctx.db.insert("adminUsers", { userId });
+	});
 	return t.withIdentity({ subject: userId, sessionId });
 }
