@@ -24,6 +24,7 @@ import {
 	WatchlistDrawer,
 	WatchlistSheet,
 } from "@/components/watchlist/watchlist-drawer";
+import { toggleEntryOptimistic } from "@/lib/watchlist-optimistic";
 
 // The open channel-detail modal, deep-linked in the URL: `channel` is the
 // channel id, `form` its Short/Long variant. Both present ⇒ the modal is open,
@@ -58,7 +59,6 @@ function FeedPage() {
 	// (Folders + root entries) and the saved-state keys painted on cards under
 	// both toggles. The keys flatten across every Folder and the root.
 	const watchlist = useQuery(api.watchlist.list);
-	const toggleSave = useMutation(api.watchlist.toggle);
 	const savedKeys = useMemo(() => {
 		if (watchlist === undefined) {
 			return new Set<string>();
@@ -174,7 +174,32 @@ function FeedPage() {
 	};
 	// Save/unsave is decoupled from opening the modal: the bookmark just toggles
 	// the (channel, form) pair. `toggle` validates its args strictly, so only the
-	// pair may ride along — no extra entry fields.
+	// pair may ride along — no extra entry fields. The optimistic update paints
+	// the change instantly: a remove filters the pair out of the cached list; an
+	// add prepends a synthesized root row, sourcing the channel identity from data
+	// already in scope — the open detail modal's seed first (covers a selection
+	// off the current Feed lens), then the loaded Feed / Watchlist via resolveSeed.
+	// Convex rolls the overlay back on rejection, where the `.catch` toast fires.
+	const toggleSave = useMutation(api.watchlist.toggle).withOptimisticUpdate(
+		(store, { channelId, form }) => {
+			const list = store.getQuery(api.watchlist.list, {});
+			if (list === undefined) {
+				return;
+			}
+			const detailSeed =
+				detail?.seed &&
+				detail.seed.channelId === channelId &&
+				detail.seed.form === form
+					? detail.seed
+					: null;
+			const identity = detailSeed ?? resolveSeed({ channelId, form });
+			store.setQuery(
+				api.watchlist.list,
+				{},
+				toggleEntryOptimistic(list, channelId, form, identity?.channel ?? null),
+			);
+		},
+	);
 	const toggleSaveSelection = (sel: WatchlistSelection) => {
 		toggleSave({ channelId: sel.channelId, form: sel.form }).catch(() => {
 			toast.error("Could not update your Watchlist.");
