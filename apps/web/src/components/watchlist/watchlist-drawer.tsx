@@ -39,6 +39,12 @@ import { toast } from "sonner";
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import { cn } from "@/lib/utils";
+import {
+	createFolderOptimistic,
+	deleteEmptyFolderOptimistic,
+	moveEntryOptimistic,
+	renameFolderOptimistic,
+} from "@/lib/watchlist-optimistic";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
 const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
@@ -560,10 +566,60 @@ function WatchlistBody({
 	onSelect: (selection: WatchlistSelection) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
-	const createFolder = useMutation(api.watchlist.createFolder);
-	const renameFolder = useMutation(api.watchlist.renameFolder);
-	const deleteFolder = useMutation(api.watchlist.deleteFolder);
-	const setEntryFolder = useMutation(api.watchlist.setEntryFolder);
+	// Each Watchlist write paints optimistically against the cached `list` query
+	// so the drawer reacts instantly; Convex rolls the overlay back on rejection
+	// and the `.catch` toasts below are the failure signal. See
+	// `lib/watchlist-optimistic` for the pure transforms and their fidelity notes.
+	const createFolder = useMutation(
+		api.watchlist.createFolder,
+	).withOptimisticUpdate((store, { name }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(api.watchlist.list, {}, createFolderOptimistic(list, name));
+	});
+	const renameFolder = useMutation(
+		api.watchlist.renameFolder,
+	).withOptimisticUpdate((store, { folderId, name }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			renameFolderOptimistic(list, folderId, name),
+		);
+	});
+	const deleteFolder = useMutation(
+		api.watchlist.deleteFolder,
+	).withOptimisticUpdate((store, { folderId }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		// Empty folders drop instantly; a populated one is left to the reactive
+		// result so we don't have to reproduce the age-ordered reparent to root.
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			deleteEmptyFolderOptimistic(list, folderId),
+		);
+	});
+	const setEntryFolder = useMutation(
+		api.watchlist.setEntryFolder,
+	).withOptimisticUpdate((store, { entryId, folderId }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			moveEntryOptimistic(list, entryId, folderId),
+		);
+	});
 	const { collapsed, toggle: toggleCollapse } = useCollapsedFolders();
 	const [newFolder, setNewFolder] = useState(false);
 	// Drag-and-drop filing runs on fine pointers only (see useIsFinePointer);
