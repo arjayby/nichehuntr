@@ -13,23 +13,6 @@ const YT_API_BASE = "https://www.googleapis.com/youtube/v3";
 /** YouTube caps `id`-list requests at 50 ids per unit of quota (ADR-0001). */
 export const MAX_IDS_PER_REQUEST = 50;
 
-/** A trending video plus the identity of the channel that uploaded it. The
- * trending endpoint returns snippet + contentDetails + statistics in a single
- * unit, so discovery gets everything it needs without a follow-up per video. */
-export type TrendingVideo = {
-	ytVideoId: string;
-	ytChannelId: string;
-	channelTitle: string;
-	title: string;
-	thumbnailUrl?: string;
-	durationSec: number;
-	/** Upload time, ms since epoch. */
-	publishedAt: number;
-	viewCount: number;
-	/** False for live streams / premieres, which the Proven gate excludes. */
-	isStandard: boolean;
-};
-
 /** Channel identity/metadata for the `channels` table. */
 export type ChannelInfo = {
 	ytChannelId: string;
@@ -42,30 +25,15 @@ export type ChannelInfo = {
 /** A point-in-time view count for one video, feeding a `videoSnapshots` row. */
 export type VideoStat = { ytVideoId: string; viewCount: number };
 
-/** Channels that surfaced as related/featured off one already-tracked channel —
- * the raw material for snowball discovery and the snowball graph (CONTEXT.md). */
-export type RelatedChannels = {
-	/** The YouTube id of the tracked channel we snowballed from. */
-	fromChannelId: string;
-	/** YouTube ids of the channels featured/related off it. */
-	relatedChannelIds: string[];
-};
-
-export type FetchTrendingOptions = {
-	/** ISO 3166 region the trending chart is anchored to. Defaults to US. */
-	regionCode?: string;
-	maxResults?: number;
-};
-
 /**
- * The seam the ingestion crons depend on. Real implementation talks to YouTube;
- * tests pass a stub so no network is hit.
+ * The seam the ingestion upkeep depends on. Real implementation talks to
+ * YouTube; tests pass a stub so no network is hit. Automated discovery is gone
+ * (ADR-0005), so this is down to channel metadata and the snapshot stats refresh
+ * — a later slice adds `fetchChannelUploads` for the Submission backfill.
  */
 export type YouTubeAdapter = {
-	fetchTrending(opts?: FetchTrendingOptions): Promise<TrendingVideo[]>;
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
 	fetchVideoStats(videoIds: string[]): Promise<VideoStat[]>;
-	fetchRelatedChannels(channelIds: string[]): Promise<RelatedChannels[]>;
 };
 
 /** Split a list into chunks of at most `size` (used to honor the 50-id cap). */
@@ -104,15 +72,6 @@ type ThumbnailSet = Record<string, { url?: string } | undefined>;
 
 type VideoResource = {
 	id: string;
-	snippet?: {
-		title?: string;
-		channelId?: string;
-		channelTitle?: string;
-		publishedAt?: string;
-		liveBroadcastContent?: string;
-		thumbnails?: ThumbnailSet;
-	};
-	contentDetails?: { duration?: string };
 	statistics?: { viewCount?: string };
 };
 
@@ -123,9 +82,6 @@ type ChannelResource = {
 		customUrl?: string;
 		description?: string;
 		thumbnails?: ThumbnailSet;
-	};
-	brandingSettings?: {
-		channel?: { featuredChannelsUrls?: string[] };
 	};
 };
 
@@ -188,37 +144,6 @@ export function createYouTubeAdapter(
 	}
 
 	return {
-		async fetchTrending(opts): Promise<TrendingVideo[]> {
-			// `chart=mostPopular` is the trending firehose — 1 unit, no `search.list`.
-			const body = await get<VideoResource>("videos", {
-				part: "snippet,contentDetails,statistics",
-				chart: "mostPopular",
-				regionCode: opts?.regionCode ?? "US",
-				hl: "en",
-				maxResults: String(opts?.maxResults ?? MAX_IDS_PER_REQUEST),
-			});
-			return (body.items ?? []).flatMap((item) => {
-				const channelId = item.snippet?.channelId;
-				if (!channelId) return [];
-				return [
-					{
-						ytVideoId: item.id,
-						ytChannelId: channelId,
-						channelTitle: item.snippet?.channelTitle ?? "",
-						title: item.snippet?.title ?? "",
-						thumbnailUrl: pickThumbnail(item.snippet?.thumbnails),
-						durationSec: parseIso8601Duration(
-							item.contentDetails?.duration ?? "",
-						),
-						publishedAt: Date.parse(item.snippet?.publishedAt ?? "") || 0,
-						viewCount: toViewCount(item.statistics?.viewCount),
-						isStandard:
-							(item.snippet?.liveBroadcastContent ?? "none") === "none",
-					},
-				];
-			});
-		},
-
 		async fetchChannels(channelIds): Promise<ChannelInfo[]> {
 			const items = await getByIds<ChannelResource>(
 				"channels",
@@ -243,24 +168,6 @@ export function createYouTubeAdapter(
 			return items.map((item) => ({
 				ytVideoId: item.id,
 				viewCount: toViewCount(item.statistics?.viewCount),
-			}));
-		},
-
-		async fetchRelatedChannels(channelIds): Promise<RelatedChannels[]> {
-			// Featured channels via `brandingSettings` — 1 unit / 50 ids, never
-			// `search.list` (ADR-0001). YouTube has been paring back related-channel
-			// surfaces, so this can come back empty for many channels; snowball then
-			// simply adds nothing that tick and Saturation leans on the trending
-			// firehose's own niche overlap. Best-effort by design (a humble adapter).
-			const items = await getByIds<ChannelResource>(
-				"channels",
-				"brandingSettings",
-				channelIds,
-			);
-			return items.map((item) => ({
-				fromChannelId: item.id,
-				relatedChannelIds:
-					item.brandingSettings?.channel?.featuredChannelsUrls ?? [],
 			}));
 		},
 	};

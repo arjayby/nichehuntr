@@ -129,11 +129,11 @@ export default defineSchema({
 		name: v.string(),
 	}).index("by_operator", ["operatorId"]),
 
-	// The snowball graph (CONTEXT.md): a directed edge means `toChannelId` surfaced
-	// as related/featured off `fromChannelId` during snowball discovery. Its purpose
-	// is to populate same-niche clusters so vector search has neighbors to find; its
-	// density around a channel is also the cold-start Saturation fallback before
-	// embeddings exist. Edges are deduped on insert, so a neighbor count is honest.
+	// Legacy snowball graph (ADR-0005): a directed edge once meant `toChannelId`
+	// surfaced as related/featured off `fromChannelId` during snowball discovery.
+	// Automated discovery is removed, so nothing writes or reads edges anymore; the
+	// table is retained only so the cutover purge migration can empty it, and a
+	// later slice drops it once the pre-cutover rows are gone.
 	channelEdges: defineTable({
 		fromChannelId: v.id("channels"),
 		toChannelId: v.id("channels"),

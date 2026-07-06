@@ -36,6 +36,14 @@ _Avoid_: Saved channels, favorites, bookmarks.
 The Operator's flat, private grouping inside the [[Watchlist]] — a named bucket expressing curation intent (e.g. "faceless", "next month"). No nesting; a watchlist entry sits in at most one Folder or at the root. Deleting a Folder returns its entries to the root — it never deletes them. Folders group; they do not rank — ordering within the Watchlist is automatic.
 _Avoid_: Tag, label, category, collection.
 
+**Admin**:
+A privileged operator authorized to submit [[Channel]]s into the [[Feed]]. Distinct from the [[Operator]] paywall — admin is a separate authorization axis (a role, not a subscription), and an Admin need not hold an active subscription to submit. Membership lives in a local role table keyed by the auth user id, granted by email, and bootstrapped once out-of-band. See ADR-0005.
+_Avoid_: Superuser, moderator, owner.
+
+**Submission**:
+An [[Admin]]'s request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. Replaces automated discovery (ADR-0005) as the sole way a channel enters the system. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel, doubling as a manual refresh.
+_Avoid_: Queue, request, candidate.
+
 ## Discovery pipeline
 
 The three columns are a left-to-right **momentum lifecycle**: a channel's position is a function of **momentum** and **saturation**, so the Operator can time their clone. It is _not_ three independent sorted feeds.
@@ -44,7 +52,7 @@ The three columns are a left-to-right **momentum lifecycle**: a channel's positi
 A listing's position in the momentum lifecycle. One of Emerging, Breaking Out, or Established. Derived from [[Momentum]] + [[Saturation]], not assigned manually, with **saturation dominating**: a crowded niche is Established regardless of momentum. Otherwise strong momentum ⇒ Breaking Out, modest positive momentum ⇒ Emerging, flat/declining ⇒ Established. All thresholds are tunable.
 
 **Emerging** (column 1):
-A channel whose recent uploads are accelerating relative to its own [[Baseline]], reached via snowball, with low saturation. Operator's read: risky, but first-mover. Note: _not_ "brand new to YouTube" — we can't surface never-before-seen channels; emergence is detected as acceleration within the set we've reached.
+A channel whose recent uploads are accelerating relative to its own [[Baseline]], with low saturation. Operator's read: risky, but first-mover. Note: _not_ "brand new to YouTube" — emergence is detected as acceleration within the admin-submitted set, not never-before-seen channels.
 
 **Breaking Out** (column 2):
 [[Proven]], strong momentum, still low saturation. The sweet spot — clone _now_.
@@ -86,5 +94,5 @@ Visible headroom to out-execute — lazy thumbnails, weak editing, shallow conte
 The niche pulls high-CPM/RPM or B2B/enterprise monetization (finance, software, industry education, high-ticket) versus low-value broad entertainment.
 
 **Saturation**:
-How many comparable channels already exist in the same (implicit) niche. The secondary axis of Stage; high saturation pushes a channel toward Established. Measured as the count of tracked channels whose content embedding falls within a similarity threshold (nearest-neighbor cluster size via Convex vector search) — this keeps niche implicit while still counting competitors. Snowball-graph density is the cold-start fallback before embeddings run.
+How many comparable channels already exist in the same (implicit) niche. The secondary axis of Stage; high saturation pushes a channel toward Established. Measured as the count of tracked channels whose content embedding falls within a similarity threshold (nearest-neighbor cluster size via Convex vector search) — this keeps niche implicit while still counting competitors. On a small admin-curated catalog it cold-starts weak (few neighbors ⇒ low saturation) until the catalog grows (ADR-0005).
 _Avoid_: Competition, crowdedness.

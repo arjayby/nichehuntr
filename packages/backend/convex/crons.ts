@@ -3,21 +3,15 @@ import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
 
 /**
- * The live-ingestion schedule (ADR-0001, ADR-0003). Cadences are deliberately
- * frugal: discovery is ~2 quota units per tick (trending + one batched channels
- * call), snapshots batch 50 video ids per unit, and snowball is one
- * `brandingSettings` batch plus one `channels` batch — so all sit far under the
- * ~10k units/day budget. The embed pass spends no YouTube quota (only the
- * embeddings provider). Intervals are tunable.
+ * The live-ingestion schedule (ADR-0001, ADR-0003, ADR-0005). Automated
+ * discovery is gone (ADR-0005): channels now enter only by admin Submission, so
+ * there is no trending or snowball cron. What remains is the judgment engine's
+ * upkeep — cadences are deliberately frugal: snapshots batch 50 video ids per
+ * unit, and the embed pass spends no YouTube quota (only the embeddings
+ * provider) — so all sit far under the ~10k units/day budget. Intervals are
+ * tunable.
  */
 const crons = cronJobs();
-
-crons.interval(
-	"youtube discovery",
-	{ hours: 6 },
-	internal.ingest.discoveryCron,
-	{},
-);
 
 crons.interval(
 	"youtube snapshots",
@@ -26,17 +20,8 @@ crons.interval(
 	{},
 );
 
-// Snowball less often than trending: featured-channel graphs barely move, and
-// it only needs to keep same-niche clusters populated for Saturation.
-crons.interval(
-	"youtube snowball",
-	{ hours: 12 },
-	internal.ingest.snowballCron,
-	{},
-);
-
-// Embed + measure Saturation between snapshot cycles so new channels get a niche
-// read soon after discovery, and existing reads track the growing graph.
+// Embed + measure Saturation between snapshot cycles so a submitted channel gets
+// a niche read soon after intake, and existing reads track the growing graph.
 crons.interval(
 	"embed and saturate",
 	{ hours: 6 },

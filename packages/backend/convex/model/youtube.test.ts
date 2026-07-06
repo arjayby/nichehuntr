@@ -40,43 +40,11 @@ function recordingFetch(urls: string[]): typeof fetch {
 		urls.push(url);
 		const parsed = new URL(url);
 		const ids = parsed.searchParams.get("id");
-		let items: unknown[];
-		if (parsed.searchParams.get("chart") === "mostPopular") {
-			items = [
-				{
-					id: "vid_live",
-					snippet: {
-						title: "Live now",
-						channelId: "chan_a",
-						channelTitle: "Channel A",
-						publishedAt: "2026-01-01T00:00:00Z",
-						liveBroadcastContent: "live",
-						thumbnails: { high: { url: "https://img/high.jpg" } },
-					},
-					contentDetails: { duration: "P0D" },
-					statistics: { viewCount: "1234" },
-				},
-				{
-					id: "vid_std",
-					snippet: {
-						title: "A short",
-						channelId: "chan_b",
-						channelTitle: "Channel B",
-						publishedAt: "2026-01-02T00:00:00Z",
-						liveBroadcastContent: "none",
-						thumbnails: { medium: { url: "https://img/med.jpg" } },
-					},
-					contentDetails: { duration: "PT45S" },
-					statistics: { viewCount: "50000" },
-				},
-			];
-		} else {
-			items = (ids?.split(",") ?? []).map((id) => ({
-				id,
-				snippet: { title: `Title ${id}`, customUrl: `@${id}` },
-				statistics: { viewCount: "100" },
-			}));
-		}
+		const items = (ids?.split(",") ?? []).map((id) => ({
+			id,
+			snippet: { title: `Title ${id}`, customUrl: `@${id}` },
+			statistics: { viewCount: "100" },
+		}));
 		return new Response(JSON.stringify({ items }), {
 			status: 200,
 			headers: { "content-type": "application/json" },
@@ -85,34 +53,6 @@ function recordingFetch(urls: string[]): typeof fetch {
 }
 
 describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
-	it("pulls trending via mostPopular, US/en anchored, never search.list", async () => {
-		const urls: string[] = [];
-		const adapter = createYouTubeAdapter("KEY", recordingFetch(urls));
-
-		const videos = await adapter.fetchTrending();
-
-		expect(urls).toHaveLength(1);
-		const url = new URL(urls[0] as string);
-		expect(url.pathname).toMatch(/\/videos$/);
-		expect(url.searchParams.get("chart")).toBe("mostPopular");
-		expect(url.searchParams.get("regionCode")).toBe("US");
-		expect(url.searchParams.get("hl")).toBe("en");
-		expect(urls.some((u) => u.includes("/search"))).toBe(false);
-
-		// Mapping: live broadcast is non-standard with a 0s duration; the short is
-		// standard with its duration parsed and view count coerced to a number.
-		const live = videos.find((v) => v.ytVideoId === "vid_live");
-		const std = videos.find((v) => v.ytVideoId === "vid_std");
-		expect(live).toMatchObject({ isStandard: false, durationSec: 0 });
-		expect(std).toMatchObject({
-			isStandard: true,
-			durationSec: 45,
-			viewCount: 50000,
-			ytChannelId: "chan_b",
-			thumbnailUrl: "https://img/med.jpg",
-		});
-	});
-
 	it("batches video-stats ids 50 at a time", async () => {
 		const urls: string[] = [];
 		const adapter = createYouTubeAdapter("KEY", recordingFetch(urls));
@@ -149,6 +89,6 @@ describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
 		const failing = (async () =>
 			new Response("nope", { status: 403 })) as typeof fetch;
 		const adapter = createYouTubeAdapter("KEY", failing);
-		await expect(adapter.fetchTrending()).rejects.toThrow(/403/);
+		await expect(adapter.fetchVideoStats(["v0"])).rejects.toThrow(/403/);
 	});
 });

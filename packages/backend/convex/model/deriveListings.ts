@@ -133,10 +133,10 @@ export type DeriveListingsInput<Cid> = {
 	now: number;
 	/**
 	 * The channel's Saturation: the count of similar tracked channels in its
-	 * (implicit) niche — nearest-neighbor cluster size via vector search, or the
-	 * snowball-graph density fallback (CONTEXT.md). Per-channel because the content
-	 * embedding is per-channel, so it rides every form's Listing alike; `null` until
-	 * measured, leaving Stage on the momentum axis.
+	 * (implicit) niche — nearest-neighbor cluster size via vector search (ADR-0003).
+	 * Per-channel because the content embedding is per-channel, so it rides every
+	 * form's Listing alike; `null` until the embed pass measures it, leaving Stage
+	 * on the momentum axis.
 	 */
 	saturation?: number | null;
 	/**
