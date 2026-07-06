@@ -140,14 +140,4 @@ export default defineSchema({
 	})
 		.index("by_from", ["fromChannelId"])
 		.index("by_to", ["toChannelId"]),
-
-	// Admins: operators authorized to submit Channels into the Feed (ADR-0005).
-	// Admin is a role on a separate authorization axis from the subscription
-	// paywall — a row here grants admin regardless of subscription. Keyed by the
-	// better-auth `userId` (same identity `watchlistEntries.operatorId` uses).
-	// Granted by email, bootstrapped once via an internal mutation. `requireAdmin`
-	// and `isAdmin` (convex/admin.ts) resolve membership through `by_userId`.
-	adminUsers: defineTable({
-		userId: v.string(),
-	}).index("by_userId", ["userId"]),
 });
