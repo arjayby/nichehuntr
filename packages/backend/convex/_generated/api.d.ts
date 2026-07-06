@@ -16,6 +16,7 @@ import type * as feed from "../feed.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
+import type * as migrations from "../migrations.js";
 import type * as model_clonability from "../model/clonability.js";
 import type * as model_deriveListings from "../model/deriveListings.js";
 import type * as model_embeddings from "../model/embeddings.js";
@@ -43,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   healthCheck: typeof healthCheck;
   http: typeof http;
   ingest: typeof ingest;
+  migrations: typeof migrations;
   "model/clonability": typeof model_clonability;
   "model/deriveListings": typeof model_deriveListings;
   "model/embeddings": typeof model_embeddings;

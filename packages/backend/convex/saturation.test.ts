@@ -5,14 +5,13 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { FeedCard, FeedGroup } from "./feed";
-import { runEmbed, runSnowball } from "./ingest";
+import { runEmbed } from "./ingest";
 import { SATURATION_CROWDED } from "./model/deriveListings";
 import {
 	EMBEDDING_DIMENSIONS,
 	type EmbeddingsAdapter,
 } from "./model/embeddings";
 import { recomputeListingsForChannel } from "./model/listings";
-import type { RelatedChannels, YouTubeAdapter } from "./model/youtube";
 
 const DAY = 24 * 60 * 60 * 1000;
 const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
@@ -85,104 +84,12 @@ function nicheOf(text: string): number {
 	return 2;
 }
 
-/** A YouTube stub for snowball: only the related/metadata calls matter here. */
-function snowballAdapter(related: RelatedChannels[]): YouTubeAdapter {
-	return {
-		fetchTrending: async () => [],
-		fetchChannels: async (ids) =>
-			ids.map((id) => ({ ytChannelId: id, title: `${id} title`, handle: id })),
-		fetchVideoStats: async () => [],
-		fetchRelatedChannels: async () => related,
-	};
-}
-
 function cardByTitle(groups: FeedGroup[], title: string): FeedCard | undefined {
 	return groups.flatMap((g) => g.cards).find((c) => c.channel.title === title);
 }
 
 const longFeed = (operator: Operator) =>
 	operator.query(api.feed.feed, { form: "long" });
-
-describe("runSnowball", () => {
-	it("tracks related channels and records graph edges", async () => {
-		const { t } = await setup();
-		await t.run(async (ctx) =>
-			addStrongChannel(ctx, { ytId: "seed_a", title: "Seed A" }),
-		);
-
-		const related: RelatedChannels[] = [
-			{
-				fromChannelId: "seed_a",
-				relatedChannelIds: ["rel_1", "rel_2", "rel_3"],
-			},
-		];
-		const result = await t.action(async (ctx) =>
-			runSnowball(ctx, snowballAdapter(related)),
-		);
-		expect(result).toMatchObject({ seeds: 1, discovered: 3, edges: 3 });
-
-		const counts = await t.run(async (ctx) => ({
-			channels: (await ctx.db.query("channels").collect()).length,
-			snowball: (
-				await ctx.db
-					.query("channels")
-					.withIndex("by_source", (q) => q.eq("source", "snowball"))
-					.collect()
-			).length,
-			edges: (await ctx.db.query("channelEdges").collect()).length,
-		}));
-		expect(counts).toEqual({ channels: 4, snowball: 3, edges: 3 });
-	});
-
-	it("is idempotent — re-snowballing the same graph adds nothing", async () => {
-		const { t } = await setup();
-		await t.run(async (ctx) =>
-			addStrongChannel(ctx, { ytId: "seed_b", title: "Seed B" }),
-		);
-		const related: RelatedChannels[] = [
-			{ fromChannelId: "seed_b", relatedChannelIds: ["rel_1", "rel_2"] },
-		];
-
-		await t.action(async (ctx) => runSnowball(ctx, snowballAdapter(related)));
-		const second = await t.action(async (ctx) =>
-			runSnowball(ctx, snowballAdapter(related)),
-		);
-		expect(second).toMatchObject({ discovered: 0, edges: 0 });
-
-		const edges = await t.run(
-			async (ctx) => (await ctx.db.query("channelEdges").collect()).length,
-		);
-		expect(edges).toBe(2);
-	});
-
-	it("feeds the snowball-density fallback before embeddings exist", async () => {
-		const { t, operator } = await setup();
-		await t.run(async (ctx) =>
-			addStrongChannel(ctx, { ytId: "seed_dense", title: "Seed Dense" }),
-		);
-		// On momentum alone it is Breaking Out.
-		expect(cardByTitle(await longFeed(operator), "Seed Dense")?.stage).toBe(
-			"breaking_out",
-		);
-
-		// Snowball a crowded neighborhood off it — enough edges to cross the crowded
-		// band, so the density fallback alone forces Established.
-		const related: RelatedChannels[] = [
-			{
-				fromChannelId: "seed_dense",
-				relatedChannelIds: Array.from(
-					{ length: SATURATION_CROWDED },
-					(_, i) => `dense_${i}`,
-				),
-			},
-		];
-		await t.action(async (ctx) => runSnowball(ctx, snowballAdapter(related)));
-
-		const card = cardByTitle(await longFeed(operator), "Seed Dense");
-		expect(card?.saturation).toBe(SATURATION_CROWDED);
-		expect(card?.stage).toBe("established");
-	});
-});
 
 describe("runEmbed — embeddings + Saturation", () => {
 	it("backfills an embedding of the index's width per channel", async () => {

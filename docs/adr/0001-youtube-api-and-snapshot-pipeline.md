@@ -10,5 +10,5 @@ We use the **YouTube Data API v3** as the source of record for channel/video dat
 ## Consequences
 
 - **Cold-start is accepted:** momentum for a newly discovered channel is proxy-based until ~24–72h of snapshots exist.
-- **Quota is a design constraint:** `search.list` costs 100 units; stats refresh is cheap (batch 50 IDs / 1 unit). Discovery must be frugal (favor trending/related/snowball over raw search).
+- **Quota is a design constraint:** `search.list` costs 100 units; stats refresh is cheap (batch 50 IDs / 1 unit). Discovery must be frugal (favor trending/related/snowball over raw search). _(Superseded by ADR-0005: automated discovery is removed; channels now enter only by admin Submission. The snapshot time-series and quota constraint below still stand.)_
 - **YouTube ToS limits data retention** — snapshots must be refreshed/expired per their rules.

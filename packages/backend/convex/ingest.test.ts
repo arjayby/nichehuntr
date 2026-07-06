@@ -1,28 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setup as harnessSetup } from "../test/harness";
-import { api } from "./_generated/api";
-import { runDiscovery, runSnapshot } from "./ingest";
+import { api, internal } from "./_generated/api";
+import { runSnapshot } from "./ingest";
 import type { Stage } from "./model/deriveListings";
-import type {
-	ChannelInfo,
-	TrendingVideo,
-	YouTubeAdapter,
-} from "./model/youtube";
+import type { YouTubeAdapter } from "./model/youtube";
 
 const DAY = 24 * 60 * 60 * 1000;
 const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
 
-/** Build a run of standard, settled long-form trending videos for one channel. */
+/** A discovered video in the shape `upsertDiscovered` ingests. */
+type DiscoveredVideo = {
+	ytVideoId: string;
+	ytChannelId: string;
+	title: string;
+	durationSec: number;
+	publishedAt: number;
+	viewCount: number;
+	isStandard: boolean;
+};
+
+/** Build a run of standard, settled long-form uploads for one channel. */
 function longVideos(
 	channelId: string,
 	opts: { count: number; viewCount: number; ageDays: number; tag?: string },
-): TrendingVideo[] {
+): DiscoveredVideo[] {
 	const { count, viewCount, ageDays, tag = "v" } = opts;
 	return Array.from({ length: count }, (_, i) => ({
 		ytVideoId: `${channelId}_${tag}${i}`,
 		ytChannelId: channelId,
-		channelTitle: `${channelId} title`,
 		title: `${channelId} ${tag} ${i}`,
 		durationSec: LONG_SEC,
 		publishedAt: Date.now() - ageDays * DAY,
@@ -31,16 +37,11 @@ function longVideos(
 	}));
 }
 
-/** A stub standing in for the humble YouTube adapter — no network. */
-function stubAdapter(cfg: {
-	trending?: TrendingVideo[];
-	channels?: ChannelInfo[];
-	statViews?: number;
-}): YouTubeAdapter {
+/** A stub standing in for the humble YouTube adapter — no network. Discovery is
+ * gone (ADR-0005), so the snapshot cron only needs the stats refresh. */
+function stubAdapter(cfg: { statViews?: number }): YouTubeAdapter {
 	return {
-		fetchTrending: async () => cfg.trending ?? [],
 		fetchChannels: async (ids) =>
-			cfg.channels ??
 			ids.map((id) => ({
 				ytChannelId: id,
 				title: `${id} title`,
@@ -48,7 +49,6 @@ function stubAdapter(cfg: {
 			})),
 		fetchVideoStats: async (ids) =>
 			ids.map((id) => ({ ytVideoId: id, viewCount: cfg.statViews ?? 0 })),
-		fetchRelatedChannels: async () => [],
 	};
 }
 
@@ -65,26 +65,33 @@ async function setup() {
 	return { t, asUser };
 }
 
-describe("runDiscovery", () => {
-	it("turns a fetched channel into a Proven Listing visible in the Feed", async () => {
+/** Intake a channel's uploads through the shared write path (the Submission
+ * worker's future entrypoint), deriving one snapshot per video as it lands. */
+async function ingest(
+	t: Awaited<ReturnType<typeof setup>>["t"],
+	videos: DiscoveredVideo[],
+) {
+	const ytChannelId = videos[0]?.ytChannelId;
+	return t.mutation(internal.ingest.upsertDiscovered, {
+		channels:
+			ytChannelId === undefined
+				? []
+				: [{ ytChannelId, title: `${ytChannelId} title` }],
+		videos,
+	});
+}
+
+describe("upsertDiscovered — channel/video/snapshot write path", () => {
+	it("turns ingested uploads into a Proven Listing visible in the Feed", async () => {
 		const { t, asUser } = await setup();
-		const adapter = stubAdapter({
-			trending: longVideos("chan_proven", {
+		const result = await ingest(
+			t,
+			longVideos("chan_proven", {
 				count: 5,
 				viewCount: 150_000,
 				ageDays: 60,
 			}),
-			channels: [
-				{
-					ytChannelId: "chan_proven",
-					title: "Proven Channel",
-					handle: "@proven",
-					avatarUrl: "https://img/avatar.jpg",
-				},
-			],
-		});
-
-		const result = await t.action(async (ctx) => runDiscovery(ctx, adapter));
+		);
 		expect(result).toMatchObject({
 			channels: 1,
 			videos: 5,
@@ -94,30 +101,19 @@ describe("runDiscovery", () => {
 		const longTitles = titles(
 			await asUser.query(api.feed.feed, { form: "long" }),
 		);
-		expect(longTitles).toContain("Proven Channel");
-
-		// The channel was recorded as trending-sourced, not seeded.
-		const source = await t.run(async (ctx) => {
-			const channel = await ctx.db
-				.query("channels")
-				.withIndex("by_ytId", (q) => q.eq("ytId", "chan_proven"))
-				.unique();
-			return channel?.source;
-		});
-		expect(source).toBe("trending");
+		expect(longTitles).toContain("chan_proven title");
 	});
 
 	it("does not surface a channel whose median misses the Proven threshold", async () => {
 		const { t, asUser } = await setup();
-		const adapter = stubAdapter({
-			trending: longVideos("chan_weak", {
+		await ingest(
+			t,
+			longVideos("chan_weak", {
 				count: 5,
 				viewCount: 40_000, // below the 100k long threshold
 				ageDays: 60,
 			}),
-		});
-
-		await t.action(async (ctx) => runDiscovery(ctx, adapter));
+		);
 
 		const longTitles = titles(
 			await asUser.query(api.feed.feed, { form: "long" }),
@@ -125,18 +121,16 @@ describe("runDiscovery", () => {
 		expect(longTitles).not.toContain("chan_weak title");
 	});
 
-	it("is idempotent — re-discovering patches rather than duplicating", async () => {
+	it("is idempotent — re-ingesting patches rather than duplicating", async () => {
 		const { t } = await setup();
-		const adapter = stubAdapter({
-			trending: longVideos("chan_dup", {
-				count: 5,
-				viewCount: 150_000,
-				ageDays: 60,
-			}),
+		const videos = longVideos("chan_dup", {
+			count: 5,
+			viewCount: 150_000,
+			ageDays: 60,
 		});
 
-		await t.action(async (ctx) => runDiscovery(ctx, adapter));
-		await t.action(async (ctx) => runDiscovery(ctx, adapter));
+		await ingest(t, videos);
+		await ingest(t, videos);
 
 		const counts = await t.run(async (ctx) => ({
 			channels: (await ctx.db.query("channels").collect()).length,
@@ -150,18 +144,14 @@ describe("runDiscovery", () => {
 		const { t, asUser } = await setup();
 
 		// First pass: five strong, older uploads ⇒ Proven, in the Feed.
-		await t.action(async (ctx) =>
-			runDiscovery(
-				ctx,
-				stubAdapter({
-					trending: longVideos("chan_fade", {
-						count: 5,
-						viewCount: 150_000,
-						ageDays: 90,
-						tag: "strong",
-					}),
-				}),
-			),
+		await ingest(
+			t,
+			longVideos("chan_fade", {
+				count: 5,
+				viewCount: 150_000,
+				ageDays: 90,
+				tag: "strong",
+			}),
 		);
 		expect(
 			titles(await asUser.query(api.feed.feed, { form: "long" })),
@@ -169,18 +159,14 @@ describe("runDiscovery", () => {
 
 		// Refresh: a dozen newer but weak uploads fill the Proven window and drag
 		// the median below the threshold.
-		await t.action(async (ctx) =>
-			runDiscovery(
-				ctx,
-				stubAdapter({
-					trending: longVideos("chan_fade", {
-						count: 12,
-						viewCount: 8_000,
-						ageDays: 10,
-						tag: "weak",
-					}),
-				}),
-			),
+		await ingest(
+			t,
+			longVideos("chan_fade", {
+				count: 12,
+				viewCount: 8_000,
+				ageDays: 10,
+				tag: "weak",
+			}),
 		);
 		expect(
 			titles(await asUser.query(api.feed.feed, { form: "long" })),
@@ -192,17 +178,13 @@ describe("runSnapshot", () => {
 	it("re-samples tracked videos and refreshes the derived median", async () => {
 		const { t, asUser } = await setup();
 
-		await t.action(async (ctx) =>
-			runDiscovery(
-				ctx,
-				stubAdapter({
-					trending: longVideos("chan_snap", {
-						count: 5,
-						viewCount: 150_000,
-						ageDays: 60,
-					}),
-				}),
-			),
+		await ingest(
+			t,
+			longVideos("chan_snap", {
+				count: 5,
+				viewCount: 150_000,
+				ageDays: 60,
+			}),
 		);
 
 		const medianBefore = (await asUser.query(api.feed.feed, { form: "long" }))
@@ -258,20 +240,16 @@ describe("momentum drives live column placement", () => {
 			)?.stage;
 		};
 
-		// Discovery: a proven but old, slow-moving channel. With a single snapshot,
+		// Intake: a proven but old, slow-moving channel. With a single snapshot,
 		// momentum is the views/age proxy — 150k over 90 days barely moves ⇒ cooled
 		// ⇒ Established.
-		await t.action(async (ctx) =>
-			runDiscovery(
-				ctx,
-				stubAdapter({
-					trending: longVideos("chan_slide", {
-						count: 3,
-						viewCount: 150_000,
-						ageDays: 90,
-					}),
-				}),
-			),
+		await ingest(
+			t,
+			longVideos("chan_slide", {
+				count: 3,
+				viewCount: 150_000,
+				ageDays: 90,
+			}),
 		);
 		expect(await columnOf()).toBe("established");
 
