@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { type Infer, v } from "convex/values";
 
 /** Shared Convex validators for the discovery domain, kept in one place so the
  * schema and the functions that read/write it can't drift apart. */
@@ -11,12 +11,37 @@ export const stageValidator = v.union(
 	v.literal("established"),
 );
 
-/** How a channel entered the Feed (ADR-0001: trending firehose + snowball). */
+/** How a channel entered the Feed. `admin` is the sole live intake now that
+ * automated discovery is gone (ADR-0005); `seed`/`trending`/`snowball` are
+ * retained only for pre-cutover rows. */
 export const sourceValidator = v.union(
 	v.literal("seed"),
 	v.literal("trending"),
 	v.literal("snowball"),
+	v.literal("admin"),
 );
+
+/** A Submission's lifecycle (ADR-0005, CONTEXT.md): `pending` on insert,
+ * `processing` while the worker backfills, then `tracked` (ingested — Proven or
+ * not) or `failed` (unresolvable paste / API error). Not-Proven is `tracked`. */
+export const submissionStatusValidator = v.union(
+	v.literal("pending"),
+	v.literal("processing"),
+	v.literal("tracked"),
+	v.literal("failed"),
+);
+
+/** The machine outcome summary of a tracked Submission: how many Listings the
+ * channel produced and how many of those cleared the Proven gate. */
+export const submissionOutcomeValidator = v.object({
+	listings: v.number(),
+	proven: v.number(),
+});
+
+/** Derived TS types so readers (queries, the admin table) share one source with
+ * the schema and can't drift from these validators. */
+export type SubmissionStatus = Infer<typeof submissionStatusValidator>;
+export type SubmissionOutcome = Infer<typeof submissionOutcomeValidator>;
 
 /** One AI-derived Clonability signal: a 0–100 score plus a one-line rationale. */
 export const signalValidator = v.object({

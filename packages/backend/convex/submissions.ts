@@ -1,0 +1,257 @@
+/**
+ * Admin Channel Submissions (ADR-0005) — the sole way a Channel now enters the
+ * Feed. An Admin pastes a channel id; `submitChannel` records a `pending`
+ * Submission and returns immediately, scheduling a background worker that
+ * resolves the paste, backfills the channel's recent uploads through the shared
+ * write path (`upsertDiscovered`), and writes the outcome back onto the row.
+ *
+ * The boundary mirrors ingest.ts: the humble YouTube adapter (`model/youtube.ts`)
+ * is the network seam, `runSubmission` is the tested orchestration (driven with a
+ * stub adapter, no network), and the mutations it calls are the DB seam. The
+ * `submissionWorker` internalAction wires the live adapter from env.
+ *
+ * `pending → processing → tracked | failed`. A channel that ingests but misses
+ * the Proven gate is `tracked` with a 0-proven summary, never `failed`; `failed`
+ * is reserved for an unresolvable paste or an API error (CONTEXT.md: Submission).
+ */
+
+import { ConvexError, v } from "convex/values";
+
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import type { ActionCtx } from "./_generated/server";
+import {
+	internalAction,
+	internalMutation,
+	mutation,
+	query,
+} from "./_generated/server";
+import { requireAdmin } from "./admin";
+import { liveYouTubeAdapter } from "./ingest";
+import { resolveChannelId } from "./model/submissions";
+import type { SubmissionOutcome, SubmissionStatus } from "./model/validators";
+import type { YouTubeAdapter } from "./model/youtube";
+
+/** Uploads a single Submission backfills — the latest page of the channel's
+ * uploads (one `playlistItems` page + one hydration batch, ~2 quota units). Deep
+ * enough to fill the Proven window in the dominant form. Tunable (ADR-0005). */
+const SUBMISSION_UPLOAD_LIMIT = 50;
+
+/** Submissions returned to the live admin table, newest-first. Tunable. */
+const SUBMISSION_LIST_LIMIT = 50;
+
+/** A row of the live Submissions table — the Submission plus its outcome. */
+export type SubmissionRow = {
+	_id: Id<"submissions">;
+	_creationTime: number;
+	rawInput: string;
+	status: SubmissionStatus;
+	resolvedYtChannelId: string | null;
+	channelId: Id<"channels"> | null;
+	outcome: SubmissionOutcome | null;
+	failureReason: string | null;
+};
+
+// --- Admin-facing mutation & query ---------------------------------------------
+
+/**
+ * Accept a pasted channel and start ingesting it in the background. Admin-gated;
+ * validates that the paste isn't blank, inserts a `pending` Submission, and
+ * schedules the worker with `runAfter(0, …)` so the request returns instantly —
+ * the Admin never waits on YouTube. Returns the new Submission id.
+ */
+export const submitChannel = mutation({
+	args: { rawInput: v.string() },
+	handler: async (ctx, { rawInput }): Promise<Id<"submissions">> => {
+		const admin = await requireAdmin(ctx);
+		const trimmed = rawInput.trim();
+		if (trimmed.length === 0) {
+			throw new ConvexError("EMPTY_INPUT");
+		}
+		const submissionId = await ctx.db.insert("submissions", {
+			rawInput: trimmed,
+			submittedBy: admin._id,
+			status: "pending",
+		});
+		await ctx.scheduler.runAfter(0, internal.submissions.submissionWorker, {
+			submissionId,
+		});
+		return submissionId;
+	},
+});
+
+/** Recent Submissions, newest-first, for the live admin table. Admin-gated.
+ * Reads off `_creationTime` (default order) — no per-admin scoping: the Feed is a
+ * shared, curated surface, so every admin sees the whole submission history. */
+export const listSubmissions = query({
+	args: {},
+	handler: async (ctx): Promise<SubmissionRow[]> => {
+		await requireAdmin(ctx);
+		const rows = await ctx.db
+			.query("submissions")
+			.order("desc")
+			.take(SUBMISSION_LIST_LIMIT);
+		return rows.map((row) => ({
+			_id: row._id,
+			_creationTime: row._creationTime,
+			rawInput: row.rawInput,
+			status: row.status,
+			resolvedYtChannelId: row.resolvedYtChannelId ?? null,
+			channelId: row.channelId ?? null,
+			outcome: row.outcome ?? null,
+			failureReason: row.failureReason ?? null,
+		}));
+	},
+});
+
+// --- Internal mutations & query (the DB seam the worker drives) -----------------
+
+/** Mark a Submission `processing` and hand its raw paste to the worker in one
+ * round trip. */
+export const beginSubmission = internalMutation({
+	args: { submissionId: v.id("submissions") },
+	handler: async (ctx, { submissionId }): Promise<{ rawInput: string }> => {
+		const submission = await ctx.db.get("submissions", submissionId);
+		if (submission === null) {
+			throw new ConvexError("SUBMISSION_NOT_FOUND");
+		}
+		await ctx.db.patch("submissions", submissionId, { status: "processing" });
+		return { rawInput: submission.rawInput };
+	},
+});
+
+/**
+ * Finish a Submission as `tracked`: read back the Listings the just-ingested
+ * channel produced, summarize how many cleared the Proven gate, and stamp the
+ * resolved id / channel / outcome. Not reaching Proven still lands here (with a
+ * 0-proven summary) — the channel is tracked and may become Proven later.
+ */
+export const completeSubmission = internalMutation({
+	args: {
+		submissionId: v.id("submissions"),
+		ytChannelId: v.string(),
+	},
+	handler: async (ctx, { submissionId, ytChannelId }): Promise<null> => {
+		const channel = await ctx.db
+			.query("channels")
+			.withIndex("by_ytId", (q) => q.eq("ytId", ytChannelId))
+			.unique();
+		if (channel === null) {
+			// The write path just upserted it, so this is unreachable in practice; be
+			// defensive rather than throw and strand the Submission in `processing`.
+			await ctx.db.patch("submissions", submissionId, {
+				status: "failed",
+				failureReason: "Channel vanished after ingest.",
+			});
+			return null;
+		}
+		const listings = await ctx.db
+			.query("listings")
+			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
+			.collect();
+		const proven = listings.filter((listing) => listing.proven).length;
+		await ctx.db.patch("submissions", submissionId, {
+			status: "tracked",
+			resolvedYtChannelId: ytChannelId,
+			channelId: channel._id,
+			outcome: { listings: listings.length, proven },
+			failureReason: undefined,
+		});
+		return null;
+	},
+});
+
+/** Mark a Submission `failed` with a human-readable reason — an unresolvable
+ * paste or an API error (both retryable by re-pasting). */
+export const failSubmission = internalMutation({
+	args: { submissionId: v.id("submissions"), reason: v.string() },
+	handler: async (ctx, { submissionId, reason }): Promise<null> => {
+		await ctx.db.patch("submissions", submissionId, {
+			status: "failed",
+			failureReason: reason,
+		});
+		return null;
+	},
+});
+
+// --- Orchestration (plain helper, tested with a stub adapter) -------------------
+
+/**
+ * Backfill one Submission end-to-end: resolve its paste → fetch channel metadata
+ * + recent uploads → upsert them through the shared write path (stamping
+ * `source: "admin"`) → summarize the Proven outcome onto the row. An unresolvable
+ * paste or a missing channel `fail`s with a clear reason; an adapter throw (API
+ * error) `fail`s too — everything that actually ingested is `tracked`. Idempotent
+ * per channel: re-running refreshes rather than duplicates.
+ */
+export async function runSubmission(
+	ctx: ActionCtx,
+	adapter: YouTubeAdapter,
+	submissionId: Id<"submissions">,
+): Promise<void> {
+	const { rawInput } = await ctx.runMutation(
+		internal.submissions.beginSubmission,
+		{ submissionId },
+	);
+
+	const ytChannelId = resolveChannelId(rawInput);
+	if (ytChannelId === null) {
+		await ctx.runMutation(internal.submissions.failSubmission, {
+			submissionId,
+			reason: "Couldn't resolve that to a channel id. Paste a UC… id.",
+		});
+		return;
+	}
+
+	// Only the adapter calls are guarded: a humble adapter surfaces network/quota
+	// failures as throws, and the paste was valid, so a throw here is a retryable
+	// API error — never an unresolvable input. DB failures in the write path below
+	// are left to propagate rather than be mislabeled as an API error. The metadata
+	// fetch is one small `channels.list` unit on top of the ~2-unit uploads backfill
+	// (playlist page + hydration) — `fetchChannelUploads` carries no channel identity.
+	let channel: Awaited<ReturnType<YouTubeAdapter["fetchChannels"]>>[number];
+	let uploads: Awaited<ReturnType<YouTubeAdapter["fetchChannelUploads"]>>;
+	try {
+		const channels = await adapter.fetchChannels([ytChannelId]);
+		const found = channels[0];
+		if (found === undefined) {
+			await ctx.runMutation(internal.submissions.failSubmission, {
+				submissionId,
+				reason: "No YouTube channel found for that id.",
+			});
+			return;
+		}
+		channel = found;
+		uploads = await adapter.fetchChannelUploads(ytChannelId, {
+			limit: SUBMISSION_UPLOAD_LIMIT,
+		});
+	} catch {
+		await ctx.runMutation(internal.submissions.failSubmission, {
+			submissionId,
+			reason: "YouTube API error — try again.",
+		});
+		return;
+	}
+
+	await ctx.runMutation(internal.ingest.upsertDiscovered, {
+		channels: [channel],
+		videos: uploads,
+		source: "admin",
+	});
+	await ctx.runMutation(internal.submissions.completeSubmission, {
+		submissionId,
+		ytChannelId,
+	});
+}
+
+// --- Worker entrypoint ---------------------------------------------------------
+
+/** The scheduled worker `submitChannel` fires: wires the live adapter from env
+ * and runs the Submission. Kept thin — all logic lives in `runSubmission`. */
+export const submissionWorker = internalAction({
+	args: { submissionId: v.id("submissions") },
+	handler: async (ctx, { submissionId }): Promise<null> => {
+		await runSubmission(ctx, liveYouTubeAdapter(), submissionId);
+		return null;
+	},
+});
