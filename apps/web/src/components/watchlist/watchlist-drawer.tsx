@@ -39,6 +39,12 @@ import { toast } from "sonner";
 import { FormBadge, initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import { cn } from "@/lib/utils";
+import {
+	createFolderOptimistic,
+	deleteEmptyFolderOptimistic,
+	moveEntryOptimistic,
+	renameFolderOptimistic,
+} from "@/lib/watchlist-optimistic";
 
 const OPEN_STORAGE_KEY = "nichehuntr.watchlist-drawer.open";
 const COLLAPSED_STORAGE_KEY = "nichehuntr.watchlist.collapsed-folders";
@@ -544,8 +550,8 @@ function findEntry(
 }
 
 /**
- * The drawer's list section: the Operator's whole Watchlist grouped into
- * Folders (alphabetical) over the root entries (newest-first). Folder create /
+ * The drawer's list section: the Operator's whole Watchlist with the root
+ * entries (newest-first) above the Folders (alphabetical). Folder create /
  * rename / delete and entry filing all run against the watchlist mutations;
  * removal reuses the caller's bookmark toggle for parity with the Feed card.
  */
@@ -560,10 +566,60 @@ function WatchlistBody({
 	onSelect: (selection: WatchlistSelection) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 }) {
-	const createFolder = useMutation(api.watchlist.createFolder);
-	const renameFolder = useMutation(api.watchlist.renameFolder);
-	const deleteFolder = useMutation(api.watchlist.deleteFolder);
-	const setEntryFolder = useMutation(api.watchlist.setEntryFolder);
+	// Each Watchlist write paints optimistically against the cached `list` query
+	// so the drawer reacts instantly; Convex rolls the overlay back on rejection
+	// and the `.catch` toasts below are the failure signal. See
+	// `lib/watchlist-optimistic` for the pure transforms and their fidelity notes.
+	const createFolder = useMutation(
+		api.watchlist.createFolder,
+	).withOptimisticUpdate((store, { name }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(api.watchlist.list, {}, createFolderOptimistic(list, name));
+	});
+	const renameFolder = useMutation(
+		api.watchlist.renameFolder,
+	).withOptimisticUpdate((store, { folderId, name }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			renameFolderOptimistic(list, folderId, name),
+		);
+	});
+	const deleteFolder = useMutation(
+		api.watchlist.deleteFolder,
+	).withOptimisticUpdate((store, { folderId }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		// Empty folders drop instantly; a populated one is left to the reactive
+		// result so we don't have to reproduce the age-ordered reparent to root.
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			deleteEmptyFolderOptimistic(list, folderId),
+		);
+	});
+	const setEntryFolder = useMutation(
+		api.watchlist.setEntryFolder,
+	).withOptimisticUpdate((store, { entryId, folderId }) => {
+		const list = store.getQuery(api.watchlist.list, {});
+		if (list === undefined) {
+			return;
+		}
+		store.setQuery(
+			api.watchlist.list,
+			{},
+			moveEntryOptimistic(list, entryId, folderId),
+		);
+	});
 	const { collapsed, toggle: toggleCollapse } = useCollapsedFolders();
 	const [newFolder, setNewFolder] = useState(false);
 	// Drag-and-drop filing runs on fine pointers only (see useIsFinePointer);
@@ -668,22 +724,8 @@ function WatchlistBody({
 					/>
 				) : null}
 
-				{folders.map((folder) => (
-					<FolderGroup
-						key={folder.folderId}
-						folder={folder}
-						collapsed={collapsed.has(folder.folderId)}
-						selection={selection}
-						dndEnabled={dndEnabled}
-						onToggleCollapse={toggleCollapse}
-						onRename={handleRename}
-						onDelete={handleDelete}
-						onSelect={onSelect}
-						onRemove={onRemove}
-					/>
-				))}
-
-				{/* Rendered whenever there are root entries, and — so an un-file has a
+				{/* Root entries sit above the Folders (newest-first, unlabeled).
+				    Rendered whenever there are root entries, and — so an un-file has a
 				    target — also while a drag is in flight even if the root is empty. */}
 				{root.length > 0 || activeEntry !== null ? (
 					<RootDropZone dndEnabled={dndEnabled} dragging={activeEntry !== null}>
@@ -703,6 +745,21 @@ function WatchlistBody({
 						) : null}
 					</RootDropZone>
 				) : null}
+
+				{folders.map((folder) => (
+					<FolderGroup
+						key={folder.folderId}
+						folder={folder}
+						collapsed={collapsed.has(folder.folderId)}
+						selection={selection}
+						dndEnabled={dndEnabled}
+						onToggleCollapse={toggleCollapse}
+						onRename={handleRename}
+						onDelete={handleDelete}
+						onSelect={onSelect}
+						onRemove={onRemove}
+					/>
+				))}
 
 				{isEmpty ? (
 					<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
@@ -789,30 +846,49 @@ function WatchlistHeader({
 export function WatchlistDrawer({
 	list,
 	selection,
+	open,
 	onSelect,
 	onRemove,
 	onCollapse,
 }: {
 	list: WatchlistList | undefined;
 	selection: WatchlistSelection | null;
+	/** Drives the width transition. The panel stays mounted when closed so it can
+	 * animate its width to zero (and back) rather than pop in and out. */
+	open: boolean;
 	onSelect: (selection: WatchlistSelection) => void;
 	onRemove: (entry: WatchlistEntry) => void;
 	onCollapse: () => void;
 }) {
 	return (
-		<aside className="hidden w-[380px] shrink-0 flex-col border-border border-l lg:flex">
-			<WatchlistHeader
-				count={list ? totalEntries(list) : undefined}
-				onClose={onCollapse}
-				closeIcon={<PanelRightClose className="size-4" />}
-				closeLabel="Collapse Watchlist"
-			/>
-			<WatchlistScroll
-				list={list}
-				selection={selection}
-				onSelect={onSelect}
-				onRemove={onRemove}
-			/>
+		// Always mounted at `lg`+; open/closed is a width transition, so the Feed
+		// grid reflows smoothly as the panel expands or collapses. The outer column
+		// clips (overflow-hidden) while the inner content keeps its fixed 380px so it
+		// slides out of view instead of reflowing as the width animates.
+		<aside
+			// Collapsed panel is still mounted (for the width animation) but must not
+			// be focusable or hit-testable; `inert` takes it out of the tab order and
+			// the a11y tree until it reopens.
+			inert={!open}
+			className={cn(
+				"hidden shrink-0 overflow-hidden border-border transition-[width] duration-300 ease-in-out lg:block",
+				open ? "w-[380px] border-l" : "w-0",
+			)}
+		>
+			<div className="flex h-full w-[380px] flex-col">
+				<WatchlistHeader
+					count={list ? totalEntries(list) : undefined}
+					onClose={onCollapse}
+					closeIcon={<PanelRightClose className="size-4" />}
+					closeLabel="Collapse Watchlist"
+				/>
+				<WatchlistScroll
+					list={list}
+					selection={selection}
+					onSelect={onSelect}
+					onRemove={onRemove}
+				/>
+			</div>
 		</aside>
 	);
 }
