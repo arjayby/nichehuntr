@@ -1,5 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@nichehuntr/backend/convex/_generated/api";
+import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import type { SubmissionRow } from "@nichehuntr/backend/convex/submissions";
 import { Button } from "@nichehuntr/ui/components/button";
 import { Input } from "@nichehuntr/ui/components/input";
@@ -124,6 +125,9 @@ function SubmissionsTable() {
 						<th className="px-4 py-2 font-medium">Input</th>
 						<th className="px-4 py-2 font-medium">Status</th>
 						<th className="px-4 py-2 font-medium">Outcome</th>
+						<th className="px-4 py-2 text-right font-medium">
+							<span className="sr-only">Actions</span>
+						</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -138,11 +142,46 @@ function SubmissionsTable() {
 							<td className="px-4 py-3 text-muted-foreground">
 								<OutcomeText row={row} />
 							</td>
+							<td className="px-4 py-3 text-right">
+								{row.status === "failed" && (
+									<RetryButton submissionId={row._id} />
+								)}
+							</td>
 						</tr>
 					))}
 				</tbody>
 			</table>
 		</div>
+	);
+}
+
+/** One-click retry for a failed row — re-runs the same paste in the background so a
+ * transient API error doesn't force a re-paste. On success the mutation moves the
+ * row off `failed` server-side; the reactive `listSubmissions` query re-runs and
+ * this button (rendered only for failed rows) unmounts — so we only clear `pending`
+ * on the error path. A row that re-fails is keyed by `_id`, so it remounts a fresh
+ * button rather than getting stuck disabled. */
+function RetryButton({ submissionId }: { submissionId: Id<"submissions"> }) {
+	const retry = useMutation(api.submissions.retrySubmission);
+	const [pending, setPending] = useState(false);
+
+	const onRetry = async () => {
+		if (pending) {
+			return;
+		}
+		setPending(true);
+		try {
+			await retry({ submissionId });
+		} catch {
+			toast.error("Couldn't retry that submission. Try again.");
+			setPending(false);
+		}
+	};
+
+	return (
+		<Button variant="outline" size="xs" onClick={onRetry} disabled={pending}>
+			Retry
+		</Button>
 	);
 }
 

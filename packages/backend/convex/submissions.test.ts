@@ -417,6 +417,187 @@ describe("runSubmission — the ingest spine", () => {
 		const row = await submissionRow(admin, secondId);
 		expect(row?.status).toBe("tracked");
 	});
+
+	it("re-submitting a tracked channel refreshes it — fresh data, no duplicate", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("restale");
+
+		// First submission: the channel ingests but its uploads miss the Proven
+		// gate, so it's tracked with no Listing and absent from the Feed.
+		const firstId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Refreshable",
+				page: uploads(id, {
+					count: 5,
+					viewCount: 40_000, // below the 100k long threshold
+					ageDays: 60,
+					durationSec: LONG_SEC,
+				}),
+			}),
+		);
+		expect((await submissionRow(admin, firstId))?.outcome).toEqual({
+			listings: 1,
+			proven: 0,
+		});
+		expect(
+			titles(await operator.query(api.feed.feed, { form: "long" })),
+		).not.toContain("Refreshable");
+
+		// Re-submit the same channel, now proven. The shared write path patches in
+		// place by ytId, recording fresh snapshots and recomputing Listings — the
+		// channel now clears the gate and appears in the Feed.
+		const secondId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Refreshable",
+				page: uploads(id, {
+					count: 5,
+					viewCount: 150_000, // now clears the long threshold
+					ageDays: 60,
+					durationSec: LONG_SEC,
+				}),
+			}),
+		);
+
+		expect(await submissionRow(admin, secondId)).toMatchObject({
+			status: "tracked",
+			resolvedYtChannelId: id,
+			outcome: { listings: 1, proven: 1 },
+		});
+		// Refreshed in place — one Channel, 5 videos, but two snapshots per video
+		// (one per run), proving fresh snapshots were recorded rather than replaced.
+		const counts = await t.run(async (ctx) => ({
+			channels: (await ctx.db.query("channels").collect()).length,
+			videos: (await ctx.db.query("videos").collect()).length,
+			listings: (await ctx.db.query("listings").collect()).length,
+			snapshots: (await ctx.db.query("videoSnapshots").collect()).length,
+		}));
+		expect(counts).toEqual({
+			channels: 1,
+			videos: 5,
+			listings: 1,
+			snapshots: 10,
+		});
+		expect(
+			titles(await operator.query(api.feed.feed, { form: "long" })),
+		).toContain("Refreshable");
+	});
+
+	it("moves a failed Submission forward when the worker is re-run", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("retryok");
+		const page = uploads(id, {
+			count: 5,
+			viewCount: 150_000,
+			ageDays: 60,
+			durationSec: LONG_SEC,
+		});
+
+		// A transient API error fails the Submission on the first run.
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: id,
+				submittedBy: "someone",
+				status: "pending",
+			}),
+		);
+		await t.action((ctx) =>
+			runSubmission(
+				ctx,
+				stubAdapter({ page, uploadsThrow: true }),
+				submissionId,
+			),
+		);
+		expect((await submissionRow(admin, submissionId))?.status).toBe("failed");
+
+		// Re-running the worker over the same row (what retry schedules) with the
+		// API now healthy tracks it and surfaces the Feed card — no re-paste needed.
+		await t.action((ctx) =>
+			runSubmission(ctx, stubAdapter({ title: "Retried", page }), submissionId),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row).toMatchObject({
+			status: "tracked",
+			outcome: { listings: 1, proven: 1 },
+		});
+		expect(row?.failureReason).toBeNull();
+		expect(
+			titles(await operator.query(api.feed.feed, { form: "long" })),
+		).toContain("Retried");
+	});
+});
+
+describe("retrySubmission — one-click retry of a failed Submission", () => {
+	it("resets a failed Submission to pending, clears the reason, and schedules the worker", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("failed"),
+				submittedBy: "someone",
+				status: "failed",
+				failureReason: "YouTube API error — try again.",
+			}),
+		);
+
+		await admin.mutation(api.submissions.retrySubmission, { submissionId });
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.status).toBe("pending");
+		expect(row?.failureReason).toBeNull();
+
+		// The worker was scheduled to re-run this exact Submission in the background.
+		const scheduled = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		expect(scheduled).toHaveLength(1);
+		expect(scheduled[0]?.name).toMatch(/submissionWorker/);
+		expect(scheduled[0]?.args).toEqual([{ submissionId }]);
+	});
+
+	it("rejects retrying a Submission that isn't failed", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("tracked"),
+				submittedBy: "someone",
+				status: "tracked",
+				resolvedYtChannelId: ucId("tracked"),
+				outcome: { listings: 1, proven: 1 },
+			}),
+		);
+
+		await expect(
+			admin.mutation(api.submissions.retrySubmission, { submissionId }),
+		).rejects.toThrow(/NOT_RETRYABLE/);
+	});
+
+	it("admin allowed, subscribed non-admin and anon rejected", async () => {
+		const t = createGatedTest();
+		const admin = await asAdmin(t, "gate-admin-3");
+		const operator = await asSubscribedOperator(t, "gate-op-3");
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("gate"),
+				submittedBy: "someone",
+				status: "failed",
+				failureReason: "boom",
+			}),
+		);
+
+		await expect(
+			operator.mutation(api.submissions.retrySubmission, { submissionId }),
+		).rejects.toThrow(/ADMIN_REQUIRED/);
+		await expect(
+			t.mutation(api.submissions.retrySubmission, { submissionId }),
+		).rejects.toThrow(/UNAUTHENTICATED/);
+		await expect(
+			admin.mutation(api.submissions.retrySubmission, { submissionId }),
+		).resolves.toBeNull();
+	});
 });
 
 describe("submitChannel — accepts instantly, ingests in the background", () => {
