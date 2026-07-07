@@ -57,6 +57,10 @@ export type YouTubeAdapter = {
 		channelId: string,
 		opts?: { limit?: number },
 	): Promise<ChannelUpload[]>;
+	/** Resolve a `@handle` to its canonical `UC…` channel id (or `null` if no
+	 * channel owns it). The Submission worker's handle-lookup seam — a URL/id paste
+	 * never reaches it. One `channels.list?forHandle` unit. */
+	resolveHandle(handle: string): Promise<string | null>;
 };
 
 /** Split a list into chunks of at most `size` (used to honor the 50-id cap). */
@@ -192,6 +196,18 @@ export function createYouTubeAdapter(
 				avatarUrl: pickThumbnail(item.snippet?.thumbnails),
 				description: item.snippet?.description,
 			}));
+		},
+
+		async resolveHandle(handle): Promise<string | null> {
+			// `forHandle` accepts the handle with or without the leading `@`; strip
+			// it so a paste like `@mrbeast` and the URL form `/@mrbeast` hit the same
+			// query. `part=id` is the cheapest projection — the worker fetches full
+			// metadata separately via `fetchChannels`.
+			const body = await get<ChannelResource>("channels", {
+				part: "id",
+				forHandle: handle.replace(/^@/, ""),
+			});
+			return body.items?.[0]?.id ?? null;
 		},
 
 		async fetchVideoStats(videoIds): Promise<VideoStat[]> {

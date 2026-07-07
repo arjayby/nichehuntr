@@ -43,8 +43,8 @@ function AdminPage() {
 				<div className="mb-6">
 					<h1 className="font-bold text-2xl">Admin</h1>
 					<p className="text-muted-foreground text-sm">
-						Paste a channel id to submit it into the Feed. Ingestion runs in the
-						background; the table updates live.
+						Paste a channel URL, an @handle, or a UC… id to submit it into the
+						Feed. Ingestion runs in the background; the table updates live.
 					</p>
 				</div>
 				<SubmitBox />
@@ -75,7 +75,7 @@ function SubmitBox() {
 			const code = err instanceof ConvexError ? String(err.data) : "";
 			toast.error(
 				code === "EMPTY_INPUT"
-					? "Paste a channel id first."
+					? "Paste a channel URL, @handle, or id first."
 					: "Couldn't submit that channel. Try again.",
 			);
 		} finally {
@@ -88,8 +88,8 @@ function SubmitBox() {
 			<Input
 				value={rawInput}
 				onChange={(e) => setRawInput(e.target.value)}
-				placeholder="UCxxxxxxxxxxxxxxxxxxxxxx"
-				aria-label="Channel id"
+				placeholder="youtube.com/@handle, /channel/UC…, or a UC… id"
+				aria-label="Channel URL, handle, or id"
 				className="max-w-md font-mono"
 				spellCheck={false}
 				autoComplete="off"

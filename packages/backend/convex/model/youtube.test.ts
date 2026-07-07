@@ -93,6 +93,43 @@ describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
 	});
 });
 
+describe("resolveHandle", () => {
+	/** A `channels.list?forHandle` fake: records the URL and returns one channel
+	 * whose id is derived from the handle, unless `empty` (no channel owns it). */
+	function handleFetch(urls: string[], empty = false): typeof fetch {
+		return (async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			urls.push(url);
+			const handle = new URL(url).searchParams.get("forHandle");
+			const items = empty ? [] : [{ id: `UC_${handle}` }];
+			return jsonResponse({ items });
+		}) as typeof fetch;
+	}
+
+	it("queries channels.list by handle (one unit, no search) and returns the id", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", handleFetch(urls));
+
+		const id = await adapter.resolveHandle("@mrbeast");
+
+		expect(urls).toHaveLength(1);
+		const url = new URL(urls[0] ?? "");
+		expect(url.pathname.endsWith("/channels")).toBe(true);
+		expect(url.searchParams.get("part")).toBe("id");
+		// The leading `@` is stripped before hitting the API.
+		expect(url.searchParams.get("forHandle")).toBe("mrbeast");
+		expect(urls[0]?.includes("/search")).toBe(false);
+		expect(id).toBe("UC_mrbeast");
+	});
+
+	it("returns null when no channel owns the handle", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", handleFetch(urls, true));
+
+		expect(await adapter.resolveHandle("@ghost")).toBeNull();
+	});
+});
+
 /** A fake `fetch` for the two-step uploads backfill: `playlistItems` returns a
  * page of video ids, `videos.list` hydrates them with snippet/contentDetails/
  * statistics. Records every URL so the quota contract can be asserted. */
