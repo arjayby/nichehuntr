@@ -111,6 +111,36 @@ export const listSubmissions = query({
 	},
 });
 
+/**
+ * Re-run a `failed` Submission with one click — a transient API error shouldn't
+ * force the Admin to re-paste. Admin-gated; resets the row to `pending`, clears
+ * the stale failure reason, and re-schedules the worker over the same paste. Only
+ * `failed` Submissions are retryable (a `pending`/`processing` one is already in
+ * flight, a `tracked` one uses re-submission to refresh); anything else is
+ * `NOT_RETRYABLE`. No automatic retry/backoff — this is manual only (ADR-0005).
+ */
+export const retrySubmission = mutation({
+	args: { submissionId: v.id("submissions") },
+	handler: async (ctx, { submissionId }): Promise<null> => {
+		await requireAdmin(ctx);
+		const submission = await ctx.db.get("submissions", submissionId);
+		if (submission === null) {
+			throw new ConvexError("SUBMISSION_NOT_FOUND");
+		}
+		if (submission.status !== "failed") {
+			throw new ConvexError("NOT_RETRYABLE");
+		}
+		await ctx.db.patch("submissions", submissionId, {
+			status: "pending",
+			failureReason: undefined,
+		});
+		await ctx.scheduler.runAfter(0, internal.submissions.submissionWorker, {
+			submissionId,
+		});
+		return null;
+	},
+});
+
 // --- Internal mutations & query (the DB seam the worker drives) -----------------
 
 /** Mark a Submission `processing` and hand its raw paste to the worker in one
