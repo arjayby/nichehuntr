@@ -26,14 +26,37 @@ export type ChannelInfo = {
 export type VideoStat = { ytVideoId: string; viewCount: number };
 
 /**
- * The seam the ingestion upkeep depends on. Real implementation talks to
- * YouTube; tests pass a stub so no network is hit. Automated discovery is gone
- * (ADR-0005), so this is down to channel metadata and the snapshot stats refresh
- * — a later slice adds `fetchChannelUploads` for the Submission backfill.
+ * One backfilled upload — the shape the shared write path (`upsertDiscovered`)
+ * ingests. Hydrated from `videos.list` so it carries duration (→ Form), a fresh
+ * view count (→ first Snapshot), and standardness (live streams/premieres, which
+ * the Proven gate excludes).
+ */
+export type ChannelUpload = {
+	ytVideoId: string;
+	ytChannelId: string;
+	title: string;
+	thumbnailUrl?: string;
+	durationSec: number;
+	/** Upload time, ms since epoch. */
+	publishedAt: number;
+	viewCount: number;
+	/** False for live streams / premieres, which the Proven gate excludes. */
+	isStandard: boolean;
+};
+
+/**
+ * The seam the ingestion upkeep and the Submission worker depend on. Real
+ * implementation talks to YouTube; tests pass a stub so no network is hit.
+ * Automated discovery is gone (ADR-0005): this is channel metadata, the snapshot
+ * stats refresh, and `fetchChannelUploads` — the Submission backfill.
  */
 export type YouTubeAdapter = {
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
 	fetchVideoStats(videoIds: string[]): Promise<VideoStat[]>;
+	fetchChannelUploads(
+		channelId: string,
+		opts?: { limit?: number },
+	): Promise<ChannelUpload[]>;
 };
 
 /** Split a list into chunks of at most `size` (used to honor the 50-id cap). */
@@ -72,7 +95,19 @@ type ThumbnailSet = Record<string, { url?: string } | undefined>;
 
 type VideoResource = {
 	id: string;
+	snippet?: {
+		title?: string;
+		channelId?: string;
+		publishedAt?: string;
+		liveBroadcastContent?: string;
+		thumbnails?: ThumbnailSet;
+	};
+	contentDetails?: { duration?: string };
 	statistics?: { viewCount?: string };
+};
+
+type PlaylistItemResource = {
+	contentDetails?: { videoId?: string };
 };
 
 type ChannelResource = {
@@ -168,6 +203,43 @@ export function createYouTubeAdapter(
 			return items.map((item) => ({
 				ytVideoId: item.id,
 				viewCount: toViewCount(item.statistics?.viewCount),
+			}));
+		},
+
+		async fetchChannelUploads(channelId, opts): Promise<ChannelUpload[]> {
+			// Every channel's uploads live in a playlist whose id is the channel id
+			// with the `UC` prefix swapped for `UU` — a documented YouTube invariant,
+			// so we page it directly without spending a `channels.list` unit first.
+			const uploadsPlaylistId = `UU${channelId.slice(2)}`;
+			const page = await get<PlaylistItemResource>("playlistItems", {
+				part: "contentDetails",
+				playlistId: uploadsPlaylistId,
+				maxResults: String(
+					Math.min(opts?.limit ?? MAX_IDS_PER_REQUEST, MAX_IDS_PER_REQUEST),
+				),
+			});
+			const videoIds = (page.items ?? [])
+				.map((item) => item.contentDetails?.videoId)
+				.filter((id): id is string => id !== undefined);
+			if (videoIds.length === 0) {
+				return [];
+			}
+			// One hydration batch pulls duration (→ Form), a fresh view count (→ first
+			// Snapshot), and standardness for the whole page (≤ 50 ids ⇒ 1 unit).
+			const items = await getByIds<VideoResource>(
+				"videos",
+				"snippet,contentDetails,statistics",
+				videoIds,
+			);
+			return items.map((item) => ({
+				ytVideoId: item.id,
+				ytChannelId: item.snippet?.channelId ?? channelId,
+				title: item.snippet?.title ?? "",
+				thumbnailUrl: pickThumbnail(item.snippet?.thumbnails),
+				durationSec: parseIso8601Duration(item.contentDetails?.duration ?? ""),
+				publishedAt: Date.parse(item.snippet?.publishedAt ?? "") || 0,
+				viewCount: toViewCount(item.statistics?.viewCount),
+				isStandard: (item.snippet?.liveBroadcastContent ?? "none") === "none",
 			}));
 		},
 	};

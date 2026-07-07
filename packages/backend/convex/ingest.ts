@@ -34,6 +34,7 @@ import {
 	type EmbeddingsAdapter,
 } from "./model/embeddings";
 import { recomputeListingsForChannel } from "./model/listings";
+import { sourceValidator } from "./model/validators";
 import { createYouTubeAdapter, type YouTubeAdapter } from "./model/youtube";
 
 /** Ceiling on videos re-sampled per snapshot run — bounds the query and keeps
@@ -109,8 +110,16 @@ export const upsertDiscovered = internalMutation({
 	args: {
 		channels: v.array(discoveredChannelValidator),
 		videos: v.array(discoveredVideoValidator),
+		// Provenance stamped on newly-inserted channels. The Submission worker
+		// passes `admin` — the sole live intake now (ADR-0005) and this path's
+		// default; only patched onto brand-new rows, never overwriting an existing
+		// channel's original source on an idempotent refresh.
+		source: v.optional(sourceValidator),
 	},
-	handler: async (ctx, { channels, videos }): Promise<DiscoveryResult> => {
+	handler: async (
+		ctx,
+		{ channels, videos, source },
+	): Promise<DiscoveryResult> => {
 		const now = Date.now();
 
 		const channelIdByYt = new Map<string, Id<"channels">>();
@@ -132,7 +141,7 @@ export const upsertDiscovered = internalMutation({
 				const id = await ctx.db.insert("channels", {
 					ytId: channel.ytChannelId,
 					discoveredAt: now,
-					source: "trending",
+					source: source ?? "admin",
 					...fields,
 				});
 				channelIdByYt.set(channel.ytChannelId, id);
@@ -449,8 +458,9 @@ export async function runEmbed(
 
 // --- Cron entrypoints ----------------------------------------------------------
 
-/** Build the live adapter, failing loudly if the API key isn't configured. */
-function liveAdapter(): YouTubeAdapter {
+/** Build the live adapter, failing loudly if the API key isn't configured.
+ * Shared with the Submission worker (submissions.ts). */
+export function liveYouTubeAdapter(): YouTubeAdapter {
 	const apiKey = process.env.YOUTUBE_API_KEY;
 	if (!apiKey) {
 		throw new Error(
@@ -474,7 +484,7 @@ function liveEmbeddingsAdapter(): EmbeddingsAdapter {
 export const snapshotCron = internalAction({
 	args: {},
 	handler: async (ctx): Promise<SnapshotResult> =>
-		runSnapshot(ctx, liveAdapter()),
+		runSnapshot(ctx, liveYouTubeAdapter()),
 });
 
 export const embedCron = internalAction({

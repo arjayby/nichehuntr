@@ -49,6 +49,9 @@ function stubAdapter(cfg: { statViews?: number }): YouTubeAdapter {
 			})),
 		fetchVideoStats: async (ids) =>
 			ids.map((id) => ({ ytVideoId: id, viewCount: cfg.statViews ?? 0 })),
+		// Discovery is gone; the snapshot path never backfills uploads, so this
+		// stub only needs to satisfy the adapter shape.
+		fetchChannelUploads: async () => [],
 	};
 }
 

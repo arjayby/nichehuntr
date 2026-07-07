@@ -92,3 +92,98 @@ describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
 		await expect(adapter.fetchVideoStats(["v0"])).rejects.toThrow(/403/);
 	});
 });
+
+/** A fake `fetch` for the two-step uploads backfill: `playlistItems` returns a
+ * page of video ids, `videos.list` hydrates them with snippet/contentDetails/
+ * statistics. Records every URL so the quota contract can be asserted. */
+function uploadsFetch(urls: string[], videoCount: number): typeof fetch {
+	return (async (input: string | URL | Request) => {
+		const url = typeof input === "string" ? input : input.toString();
+		urls.push(url);
+		const parsed = new URL(url);
+		if (parsed.pathname.endsWith("/playlistItems")) {
+			const items = Array.from({ length: videoCount }, (_, i) => ({
+				contentDetails: { videoId: `vid${i}` },
+			}));
+			return jsonResponse({ items });
+		}
+		// videos.list hydration
+		const ids = parsed.searchParams.get("id")?.split(",") ?? [];
+		const items = ids.map((id) => ({
+			id,
+			snippet: {
+				title: `Title ${id}`,
+				channelId: "UCchannel",
+				publishedAt: "2026-01-02T03:04:05Z",
+				liveBroadcastContent: id === "vid1" ? "live" : "none",
+				thumbnails: { high: { url: `https://img/${id}.jpg` } },
+			},
+			contentDetails: { duration: "PT10M" },
+			statistics: { viewCount: "4200" },
+		}));
+		return jsonResponse({ items });
+	}) as typeof fetch;
+}
+
+function jsonResponse(body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		status: 200,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+describe("fetchChannelUploads", () => {
+	it("pages the uploads playlist then hydrates in one details batch (~2 units)", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", uploadsFetch(urls, 50));
+
+		const uploads = await adapter.fetchChannelUploads("UCchannel", {
+			limit: 50,
+		});
+
+		// Exactly two requests: one playlistItems page + one videos.list batch.
+		expect(urls).toHaveLength(2);
+		const [playlistUrl, videosUrl] = urls.map((u) => new URL(u));
+		expect(playlistUrl?.pathname.endsWith("/playlistItems")).toBe(true);
+		// The uploads playlist id is the channel id with UC → UU.
+		expect(playlistUrl?.searchParams.get("playlistId")).toBe("UUchannel");
+		expect(videosUrl?.pathname.endsWith("/videos")).toBe(true);
+		expect(videosUrl?.searchParams.get("part")).toBe(
+			"snippet,contentDetails,statistics",
+		);
+		expect(urls.some((u) => u.includes("/search"))).toBe(false);
+
+		expect(uploads).toHaveLength(50);
+		expect(uploads[0]).toEqual({
+			ytVideoId: "vid0",
+			ytChannelId: "UCchannel",
+			title: "Title vid0",
+			thumbnailUrl: "https://img/vid0.jpg",
+			durationSec: 600,
+			publishedAt: Date.parse("2026-01-02T03:04:05Z"),
+			viewCount: 4200,
+			isStandard: true,
+		});
+	});
+
+	it("marks live broadcasts non-standard", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", uploadsFetch(urls, 3));
+
+		const uploads = await adapter.fetchChannelUploads("UCchannel");
+
+		// vid1 is flagged `liveBroadcastContent: "live"` in the fake.
+		expect(uploads.find((u) => u.ytVideoId === "vid1")?.isStandard).toBe(false);
+		expect(uploads.find((u) => u.ytVideoId === "vid0")?.isStandard).toBe(true);
+	});
+
+	it("returns nothing (and skips hydration) for a channel with no uploads", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", uploadsFetch(urls, 0));
+
+		const uploads = await adapter.fetchChannelUploads("UCempty");
+
+		expect(uploads).toEqual([]);
+		expect(urls).toHaveLength(1); // only the playlistItems page, no videos.list
+	});
+});

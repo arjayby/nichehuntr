@@ -7,6 +7,8 @@ import {
 	signalsValidator,
 	sourceValidator,
 	stageValidator,
+	submissionOutcomeValidator,
+	submissionStatusValidator,
 } from "./model/validators";
 
 export default defineSchema({
@@ -150,4 +152,25 @@ export default defineSchema({
 	adminUsers: defineTable({
 		userId: v.string(),
 	}).index("by_userId", ["userId"]),
+
+	// Admin Submissions (ADR-0005): an Admin's request to bring a Channel into the
+	// Feed, together with its ingestion outcome — the sole way a Channel now enters
+	// the system. `rawInput` is the pasted text (trimmed of surrounding
+	// whitespace on submit); `submittedBy` is the
+	// better-auth user id. Status runs `pending → processing → tracked | failed`;
+	// a channel that ingests but misses the Proven gate is `tracked` (with a 0-proven
+	// `outcome`), never `failed`. `failed` is reserved for an unresolvable paste or an
+	// API error and carries a human `failureReason`. `resolvedYtChannelId` is the
+	// canonical `UC…` id the paste resolved to and `channelId` the row it created or
+	// refreshed (idempotent per channel — a re-submit is a manual refresh). Listed
+	// newest-first off `_creationTime` for the live table (no extra index needed).
+	submissions: defineTable({
+		rawInput: v.string(),
+		submittedBy: v.string(),
+		status: submissionStatusValidator,
+		resolvedYtChannelId: v.optional(v.string()),
+		channelId: v.optional(v.id("channels")),
+		outcome: v.optional(submissionOutcomeValidator),
+		failureReason: v.optional(v.string()),
+	}),
 });
