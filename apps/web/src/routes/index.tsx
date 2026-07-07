@@ -1,9 +1,11 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// The feed is the app; marketing is the public front door. Logged-out users
-// bounce on through the _auth guard to /login, unsubscribed to /subscribe.
+import { POST_AUTH_REDIRECT_PATH } from "@/lib/auth-routing";
+
+// The redirect route decides whether the signed-in user belongs in admin,
+// feed, or subscribe. Logged-out users bounce through the _auth guard to login.
 export const Route = createFileRoute("/")({
 	beforeLoad: () => {
-		throw redirect({ to: "/feed" });
+		throw redirect({ to: POST_AUTH_REDIRECT_PATH });
 	},
 });

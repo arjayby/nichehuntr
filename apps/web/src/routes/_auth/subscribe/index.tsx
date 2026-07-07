@@ -1,10 +1,10 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import { Button } from "@nichehuntr/ui/components/button";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useAction, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import Loader from "@/components/loader";
@@ -13,6 +13,13 @@ type Interval = "month" | "year";
 
 export const Route = createFileRoute("/_auth/subscribe/")({
 	beforeLoad: async ({ context }) => {
+		const isAdmin = await context.queryClient.ensureQueryData(
+			convexQuery(api.admin.isAdmin, {}),
+		);
+		if (isAdmin) {
+			throw redirect({ to: "/admin" });
+		}
+
 		const access = await context.queryClient.ensureQueryData(
 			convexQuery(api.polar.subscriptionAccess, {}),
 		);
@@ -45,11 +52,19 @@ function productForInterval(
 }
 
 function SubscribePage() {
+	const isAdmin = useQuery(api.admin.isAdmin);
+	const navigate = useNavigate();
 	const products = useQuery(api.polar.listAllProducts);
 	const access = useQuery(api.polar.subscriptionAccess);
 	const generateCheckoutLink = useAction(api.polar.generateCheckoutLink);
 	const [interval, setInterval] = useState<Interval>("month");
 	const [redirecting, setRedirecting] = useState(false);
+
+	useEffect(() => {
+		if (isAdmin === true) {
+			navigate({ to: "/admin" });
+		}
+	}, [isAdmin, navigate]);
 
 	const monthly = productForInterval(products, "month");
 	const yearly = productForInterval(products, "year");

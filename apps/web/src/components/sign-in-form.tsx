@@ -10,15 +10,22 @@ import { Input } from "@nichehuntr/ui/components/input";
 import { Spinner } from "@nichehuntr/ui/components/spinner";
 import { useForm } from "@tanstack/react-form";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
 
 import AuthShell from "@/components/auth-shell";
 import GoogleButton from "@/components/google-button";
+import Loader from "@/components/loader";
 import { authClient } from "@/lib/auth-client";
+import {
+	POST_AUTH_REDIRECT_PATH,
+	postAuthRedirectUrl,
+} from "@/lib/auth-routing";
 
-export default function SignInForm({ redirectTo }: { redirectTo: string }) {
+export default function SignInForm({ redirectTo }: { redirectTo?: string }) {
 	const navigate = useNavigate();
+	const [isRedirecting, setIsRedirecting] = useState(false);
 
 	const form = useForm({
 		defaultValues: {
@@ -33,7 +40,11 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 				},
 				{
 					onSuccess: () => {
-						navigate({ to: redirectTo });
+						setIsRedirecting(true);
+						navigate({
+							to: POST_AUTH_REDIRECT_PATH,
+							search: redirectTo ? { redirect: redirectTo } : {},
+						});
 					},
 					onError: (error) => {
 						toast.error(error.error.message || error.error.statusText);
@@ -48,6 +59,10 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 			}),
 		},
 	});
+
+	if (isRedirecting) {
+		return <Loader />;
+	}
 
 	return (
 		<AuthShell
@@ -142,7 +157,7 @@ export default function SignInForm({ redirectTo }: { redirectTo: string }) {
 					</FieldSeparator>
 
 					<Field>
-						<GoogleButton redirectTo={redirectTo} />
+						<GoogleButton redirectTo={postAuthRedirectUrl(redirectTo)} />
 					</Field>
 				</FieldGroup>
 			</form>

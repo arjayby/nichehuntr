@@ -67,7 +67,8 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 function RootDocument() {
 	const context = useRouteContext({ from: Route.id });
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
-	const isAuthPage = pathname === "/login" || pathname === "/signup";
+	const isAuthPage =
+		pathname === "/login" || pathname === "/signup" || pathname === "/redirect";
 	return (
 		<ConvexBetterAuthProvider
 			client={context.convexQueryClient.convexClient}

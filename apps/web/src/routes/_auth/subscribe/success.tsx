@@ -1,5 +1,6 @@
+import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@nichehuntr/backend/convex/_generated/api";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { useEffect } from "react";
 
@@ -12,6 +13,14 @@ import Loader from "@/components/loader";
  * the moment the webhook lands.
  */
 export const Route = createFileRoute("/_auth/subscribe/success")({
+	beforeLoad: async ({ context }) => {
+		const isAdmin = await context.queryClient.ensureQueryData(
+			convexQuery(api.admin.isAdmin, {}),
+		);
+		if (isAdmin) {
+			throw redirect({ to: "/admin" });
+		}
+	},
 	head: () => ({
 		meta: [{ title: "Activating subscription · nichehuntr" }],
 	}),
@@ -19,14 +28,21 @@ export const Route = createFileRoute("/_auth/subscribe/success")({
 });
 
 function SubscribeSuccessPage() {
+	const isAdmin = useQuery(api.admin.isAdmin);
 	const access = useQuery(api.polar.subscriptionAccess);
 	const navigate = useNavigate();
 
 	useEffect(() => {
-		if (access?.hasAccess) {
+		if (isAdmin === true) {
+			navigate({ to: "/admin", replace: true });
+		}
+	}, [isAdmin, navigate]);
+
+	useEffect(() => {
+		if (isAdmin === false && access?.hasAccess) {
 			navigate({ to: "/feed", replace: true });
 		}
-	}, [access, navigate]);
+	}, [access, isAdmin, navigate]);
 
 	return (
 		<div className="container mx-auto flex max-w-md flex-col items-center gap-4 px-4 py-24 text-center">
