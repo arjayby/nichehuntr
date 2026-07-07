@@ -44,12 +44,16 @@ function uploads(
 }
 
 /** A stub YouTube adapter — no network. `fetchChannelUploads` echoes a fixed
- * page; the flags exercise the worker's failure branches. */
+ * page; the flags exercise the worker's failure branches. `resolveHandle` returns
+ * `resolveHandleTo` (default `null` ⇒ handle not found) or throws on
+ * `handleThrows`, so the handle-lookup branches are driven without network. */
 function stubAdapter(opts: {
 	title?: string;
 	page: ChannelUpload[];
 	channelMissing?: boolean;
 	uploadsThrow?: boolean;
+	resolveHandleTo?: string | null;
+	handleThrows?: boolean;
 }): YouTubeAdapter {
 	return {
 		fetchChannels: async (ids) =>
@@ -68,6 +72,26 @@ function stubAdapter(opts: {
 			}
 			return opts.page.map((u) => ({ ...u, ytChannelId: channelId }));
 		},
+		resolveHandle: async () => {
+			if (opts.handleThrows) {
+				throw new Error("YouTube API error");
+			}
+			return opts.resolveHandleTo ?? null;
+		},
+	};
+}
+
+/** An adapter every method of which throws — proves a path never touched it, so a
+ * clean failure reason came from the pure resolver, not a mislabeled API error. */
+function unusableAdapter(): YouTubeAdapter {
+	const boom = async (): Promise<never> => {
+		throw new Error("adapter must not be called");
+	};
+	return {
+		fetchChannels: boom,
+		fetchVideoStats: boom,
+		fetchChannelUploads: boom,
+		resolveHandle: boom,
 	};
 }
 
@@ -236,13 +260,15 @@ describe("runSubmission — the ingest spine", () => {
 		).not.toContain("Weak Channel");
 	});
 
-	it("fails an unresolvable paste without touching the adapter", async () => {
-		const { t, admin } = await setup();
+	it("tracks a proven channel pasted as a /channel/ URL", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("urlchan");
 		const submissionId = await runOver(
 			t,
-			"@somehandle",
+			`https://www.youtube.com/channel/${id}`,
 			stubAdapter({
-				page: uploads("UCx", {
+				title: "URL Channel",
+				page: uploads(id, {
 					count: 5,
 					viewCount: 150_000,
 					ageDays: 60,
@@ -252,8 +278,88 @@ describe("runSubmission — the ingest spine", () => {
 		);
 
 		const row = await submissionRow(admin, submissionId);
+		expect(row).toMatchObject({
+			status: "tracked",
+			resolvedYtChannelId: id,
+			outcome: { listings: 1, proven: 1 },
+		});
+		expect(
+			titles(await operator.query(api.feed.feed, { form: "long" })),
+		).toContain("URL Channel");
+	});
+
+	it.each([
+		["a bare @handle", "@mrbeast"],
+		["an @handle URL", "https://youtube.com/@mrbeast"],
+	])("resolves %s to its id and tracks the channel", async (_label, paste) => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("handle");
+		const submissionId = await runOver(
+			t,
+			paste,
+			stubAdapter({
+				title: "Handle Channel",
+				resolveHandleTo: id, // the live lookup maps @mrbeast → this id
+				page: uploads(id, {
+					count: 5,
+					viewCount: 150_000,
+					ageDays: 60,
+					durationSec: LONG_SEC,
+				}),
+			}),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row).toMatchObject({
+			status: "tracked",
+			resolvedYtChannelId: id,
+			outcome: { listings: 1, proven: 1 },
+		});
+		expect(
+			titles(await operator.query(api.feed.feed, { form: "long" })),
+		).toContain("Handle Channel");
+	});
+
+	it("fails a handle no channel owns with a resolve reason", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await runOver(
+			t,
+			"@ghosthandle",
+			stubAdapter({ page: [], resolveHandleTo: null }),
+		);
+
+		const row = await submissionRow(admin, submissionId);
 		expect(row?.status).toBe("failed");
 		expect(row?.failureReason).toMatch(/resolve/i);
+	});
+
+	it("fails with an API-error reason when the handle lookup throws", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await runOver(
+			t,
+			"@flakyhandle",
+			stubAdapter({ page: [], handleThrows: true }),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.status).toBe("failed");
+		expect(row?.failureReason).toMatch(/api error/i);
+	});
+
+	it.each([
+		["a video URL", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", /video/i],
+		["a legacy /c/ URL", "https://youtube.com/c/SomeChannel", /legacy|\/c\//i],
+		["free-text garbage", "not a channel at all", /recognize/i],
+	])("fails %s without touching the adapter", async (_label, paste, reasonPattern) => {
+		const { t, admin } = await setup();
+		// The adapter throws on any call, so reaching it would surface an
+		// API-error reason — asserting the clean reason proves the pure resolver
+		// rejected the paste before any network.
+		const submissionId = await runOver(t, paste, unusableAdapter());
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.status).toBe("failed");
+		expect(row?.failureReason).toMatch(reasonPattern);
 	});
 
 	it("fails when the id resolves but no channel exists", async () => {

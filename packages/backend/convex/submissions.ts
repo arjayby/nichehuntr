@@ -1,9 +1,11 @@
 /**
  * Admin Channel Submissions (ADR-0005) — the sole way a Channel now enters the
- * Feed. An Admin pastes a channel id; `submitChannel` records a `pending`
- * Submission and returns immediately, scheduling a background worker that
- * resolves the paste, backfills the channel's recent uploads through the shared
- * write path (`upsertDiscovered`), and writes the outcome back onto the row.
+ * Feed. An Admin pastes a channel reference — a raw `UC…` id, a `/channel/` or
+ * `/@handle` URL, or a bare `@handle`; `submitChannel` records a `pending`
+ * Submission and returns immediately, scheduling a background worker that resolves
+ * the paste (`resolveChannelRef`, plus a live handle lookup when needed), backfills
+ * the channel's recent uploads through the shared write path (`upsertDiscovered`),
+ * and writes the outcome back onto the row.
  *
  * The boundary mirrors ingest.ts: the humble YouTube adapter (`model/youtube.ts`)
  * is the network seam, `runSubmission` is the tested orchestration (driven with a
@@ -28,7 +30,7 @@ import {
 } from "./_generated/server";
 import { requireAdmin } from "./admin";
 import { liveYouTubeAdapter } from "./ingest";
-import { resolveChannelId } from "./model/submissions";
+import { resolveChannelRef } from "./model/submissions";
 import type { SubmissionOutcome, SubmissionStatus } from "./model/validators";
 import type { YouTubeAdapter } from "./model/youtube";
 
@@ -39,6 +41,11 @@ const SUBMISSION_UPLOAD_LIMIT = 50;
 
 /** Submissions returned to the live admin table, newest-first. Tunable. */
 const SUBMISSION_LIST_LIMIT = 50;
+
+/** The failure reason for any adapter throw during resolution/backfill — a
+ * network/quota hiccup, retryable by re-pasting (CONTEXT.md: Submission). Shared
+ * so the handle-lookup and metadata-fetch catch branches can't drift. */
+const API_ERROR_REASON = "YouTube API error — try again.";
 
 /** A row of the live Submissions table — the Submission plus its outcome. */
 export type SubmissionRow = {
@@ -194,13 +201,43 @@ export async function runSubmission(
 		{ submissionId },
 	);
 
-	const ytChannelId = resolveChannelId(rawInput);
-	if (ytChannelId === null) {
+	// Normalize the paste (pure): a raw id / `/channel/` URL yields an id straight
+	// away; a bare/URL `@handle` yields a handle that still needs a live lookup;
+	// anything out of scope (video URLs, legacy `/c/` `/user/`, garbage) is an
+	// error whose reason we record verbatim on the failed Submission.
+	const ref = resolveChannelRef(rawInput);
+	if (ref.kind === "error") {
 		await ctx.runMutation(internal.submissions.failSubmission, {
 			submissionId,
-			reason: "Couldn't resolve that to a channel id. Paste a UC… id.",
+			reason: ref.reason,
 		});
 		return;
+	}
+
+	let ytChannelId: string;
+	if (ref.kind === "id") {
+		ytChannelId = ref.id;
+	} else {
+		// A handle only names the channel — resolve it to an id behind the adapter.
+		// A throw is a retryable API error; a `null` means no channel owns the handle.
+		let resolved: string | null;
+		try {
+			resolved = await adapter.resolveHandle(ref.handle);
+		} catch {
+			await ctx.runMutation(internal.submissions.failSubmission, {
+				submissionId,
+				reason: API_ERROR_REASON,
+			});
+			return;
+		}
+		if (resolved === null) {
+			await ctx.runMutation(internal.submissions.failSubmission, {
+				submissionId,
+				reason: `Couldn't resolve the handle ${ref.handle} to a channel.`,
+			});
+			return;
+		}
+		ytChannelId = resolved;
 	}
 
 	// Only the adapter calls are guarded: a humble adapter surfaces network/quota
@@ -228,7 +265,7 @@ export async function runSubmission(
 	} catch {
 		await ctx.runMutation(internal.submissions.failSubmission, {
 			submissionId,
-			reason: "YouTube API error — try again.",
+			reason: API_ERROR_REASON,
 		});
 		return;
 	}
