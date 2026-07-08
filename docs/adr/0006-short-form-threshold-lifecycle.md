@@ -1,0 +1,7 @@
+# Short-form threshold lifecycle
+
+NicheHuntr now tracks short-form channels only, where short-form means videos up to 300 seconds, so the scored unit is the Channel rather than a `(Channel, Form)` Listing. We replace snapshot-derived momentum, saturation/vector-search competitor counts, and the separate Proven gate with a simpler lifecycle based on recent Shorts: Emerging, Breaking Out, or Established when current view-count, recency, subscriber, and upload-count thresholds are met; otherwise the channel remains Tracked and hidden from the Feed.
+
+This supersedes ADR-0002's per-form Listing model and the saturation/momentum portions of ADR-0001, ADR-0003, and ADR-0005. The trade-off is less timing precision and no competitor-density signal, in exchange for a model that is explainable from current YouTube channel/video data and easier to operate.
+
+The initial thresholds are hardcoded constants: short-form is `<= 300s`; fetch up to 50 latest Shorts; classify only with at least 3 fetched Shorts; check the latest 10 Shorts when available; require at least half of the checked Shorts, rounded up, to meet the stage threshold; Emerging uses `50,000` views; Breaking Out and Established use `100,000` views; Emerging and Breaking Out require the latest Short within 14 days; Established requires at least `50,000` subscribers and `50` fetched Shorts, and does not require recent upload activity.
