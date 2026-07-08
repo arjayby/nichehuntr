@@ -85,6 +85,7 @@ const discoveredChannelValidator = v.object({
 	handle: v.optional(v.string()),
 	avatarUrl: v.optional(v.string()),
 	description: v.optional(v.string()),
+	subscriberCount: v.optional(v.number()),
 });
 
 const discoveredVideoValidator = v.object({
@@ -133,6 +134,7 @@ export const upsertDiscovered = internalMutation({
 				handle: channel.handle,
 				avatarUrl: channel.avatarUrl,
 				description: channel.description,
+				subscriberCount: channel.subscriberCount,
 			};
 			if (existing !== null) {
 				await ctx.db.patch("channels", existing._id, fields);

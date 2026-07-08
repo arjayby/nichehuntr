@@ -43,6 +43,7 @@ export const Route = createFileRoute("/_auth/_subscribed/feed")({
 
 type Form = "short" | "long";
 type Stage = FeedGroup["stage"];
+const FEED_WATCHLIST_FORM: Form = "short";
 
 /** The saved-state key the Feed paints on cards: the entry's channel + form. */
 function savedKey(channelId: string, form: Form): string {
@@ -52,8 +53,7 @@ function savedKey(channelId: string, form: Form): string {
 function FeedPage() {
 	const navigate = Route.useNavigate();
 	const search = Route.useSearch();
-	const [form, setForm] = useState<Form>("short");
-	const groups = useQuery(api.feed.feed, { form });
+	const groups = useQuery(api.feed.feed, {});
 
 	// The whole Watchlist, independent of the form lens: it feeds the drawer
 	// (Folders + root entries) and the saved-state keys painted on cards under
@@ -100,11 +100,13 @@ function FeedPage() {
 			channelId === sel.channelId && form === sel.form;
 		if (groups !== undefined) {
 			for (const group of groups) {
-				const card = group.cards.find((c) => matches(c.channelId, c.form));
+				const card = group.cards.find((c) =>
+					matches(c.channelId, FEED_WATCHLIST_FORM),
+				);
 				if (card !== undefined) {
 					return {
 						channelId: card.channelId,
-						form: card.form,
+						form: FEED_WATCHLIST_FORM,
 						channel: card.channel,
 					};
 				}
@@ -206,7 +208,10 @@ function FeedPage() {
 		});
 	};
 	const handleToggleSave = (card: FeedCard) => {
-		toggleSaveSelection({ channelId: card.channelId, form: card.form });
+		toggleSaveSelection({
+			channelId: card.channelId,
+			form: FEED_WATCHLIST_FORM,
+		});
 	};
 	const handleRemoveEntry = (entry: WatchlistEntry) => {
 		toggleSaveSelection({ channelId: entry.channelId, form: entry.form });
@@ -223,26 +228,10 @@ function FeedPage() {
 						<div>
 							<h1 className="font-bold text-2xl">Feed</h1>
 							<p className="text-muted-foreground text-sm">
-								Proven channels to clone, across the momentum lifecycle.
+								Channels to clone, grouped by lifecycle evidence.
 							</p>
 						</div>
 						<div className="flex items-center gap-2">
-							<div className="inline-flex gap-1 rounded-2xl border border-border p-1">
-								<Button
-									variant={form === "short" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setForm("short")}
-								>
-									Short
-								</Button>
-								<Button
-									variant={form === "long" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setForm("long")}
-								>
-									Long
-								</Button>
-							</div>
 							{/* Below lg the drawer is an overlay sheet; at lg+ the same
 							    button collapses/reopens the persistent panel. */}
 							<Button
@@ -338,14 +327,14 @@ function FeedColumn({
 			</header>
 			{cards.length === 0 ? (
 				<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-xs">
-					No listings yet.
+					No channels yet.
 				</p>
 			) : (
 				cards.map((card) => (
 					<ListingCard
-						key={card.listingId}
+						key={card.channelId}
 						card={card}
-						saved={savedKeys.has(savedKey(card.channelId, card.form))}
+						saved={savedKeys.has(savedKey(card.channelId, FEED_WATCHLIST_FORM))}
 						onToggleSave={onToggleSave}
 						onOpen={onOpen}
 					/>

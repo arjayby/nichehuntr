@@ -20,6 +20,7 @@ export type ChannelInfo = {
 	handle?: string;
 	avatarUrl?: string;
 	description?: string;
+	subscriberCount?: number;
 };
 
 /** A point-in-time view count for one video, feeding a `videoSnapshots` row. */
@@ -122,6 +123,10 @@ type ChannelResource = {
 		description?: string;
 		thumbnails?: ThumbnailSet;
 	};
+	statistics?: {
+		subscriberCount?: string;
+		hiddenSubscriberCount?: boolean;
+	};
 };
 
 type ListResponse<T> = { items?: T[] };
@@ -186,7 +191,7 @@ export function createYouTubeAdapter(
 		async fetchChannels(channelIds): Promise<ChannelInfo[]> {
 			const items = await getByIds<ChannelResource>(
 				"channels",
-				"snippet",
+				"snippet,statistics",
 				channelIds,
 			);
 			return items.map((item) => ({
@@ -195,6 +200,10 @@ export function createYouTubeAdapter(
 				handle: item.snippet?.customUrl,
 				avatarUrl: pickThumbnail(item.snippet?.thumbnails),
 				description: item.snippet?.description,
+				subscriberCount:
+					item.statistics?.hiddenSubscriberCount === true
+						? undefined
+						: toViewCount(item.statistics?.subscriberCount),
 			}));
 		},
 

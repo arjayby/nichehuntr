@@ -1,36 +1,39 @@
 import { v } from "convex/values";
 
-import type { Id } from "./_generated/dataModel";
-import { query } from "./_generated/server";
-import type { Signals } from "./model/clonability";
-import type { Form, Stage } from "./model/deriveListings";
-import { formValidator, stageValidator } from "./model/validators";
+import type { Doc, Id } from "./_generated/dataModel";
+import { type QueryCtx, query } from "./_generated/server";
+import {
+	type ChannelLifecycleStage,
+	deriveChannelLifecycle,
+	type LifecycleEvidence,
+} from "./model/channelLifecycle";
+import { computeClonability, type Signals } from "./model/clonability";
+import { stageValidator } from "./model/validators";
 import { requireActiveSubscription } from "./polar";
 
-/** Canonical left-to-right column order — the momentum lifecycle (CONTEXT.md). */
+type FeedStage = Exclude<ChannelLifecycleStage, "tracked">;
+
+/** Canonical left-to-right column order — the channel lifecycle (CONTEXT.md). */
 const STAGE_ORDER = [
 	"emerging",
 	"breaking_out",
 	"established",
-] as const satisfies readonly Stage[];
+] as const satisfies readonly FeedStage[];
 
 /** Safety cap on cards read per request; pagination is deferred (out of scope). */
 const MAX_FEED_CARDS = 500;
 
-/** A single Feed card: a Proven Listing plus the channel identity it renders. */
+/** Safety cap on channel videos scanned while deriving lifecycle evidence. */
+const MAX_CHANNEL_VIDEOS = 200;
+
+/** A single Feed card: a visible Channel plus lifecycle evidence. */
 export type FeedCard = {
-	listingId: Id<"listings">;
 	channelId: Id<"channels">;
-	form: Form;
-	stage: Stage;
-	medianViews: number;
-	/** Scale-free recent daily-growth rate driving Stage; the card's indicator. */
-	momentum: number | null;
-	/** Similar-channel count — the niche's crowdedness; null until measured. */
-	saturation: number | null;
+	stage: FeedStage;
+	evidence: LifecycleEvidence;
 	clonability: number | null;
-	/** The per-signal Enrichment scores + rationales behind Clonability, so the
-	 * card can show why; null until the enrich cron scores this Listing. */
+	/** Short-form Enrichment scores + rationales behind Clonability. Null until
+	 * the enrich cron scores this Channel's Shorts; it never gates visibility. */
 	signals: Signals | null;
 	channel: {
 		ytId: string;
@@ -41,9 +44,9 @@ export type FeedCard = {
 };
 
 /** One column of the Feed: a Stage and its cards, sorted by Clonability desc. */
-export type FeedGroup = { stage: Stage; cards: FeedCard[] };
+export type FeedGroup = { stage: FeedStage; cards: FeedCard[] };
 
-/** Sort by Clonability descending, keeping listings with no score yet last. */
+/** Sort by Clonability descending, keeping channels with no score yet last. */
 function byClonabilityDesc(a: FeedCard, b: FeedCard): number {
 	if (a.clonability === b.clonability) return 0;
 	if (a.clonability === null) return 1;
@@ -51,49 +54,84 @@ function byClonabilityDesc(a: FeedCard, b: FeedCard): number {
 	return b.clonability - a.clonability;
 }
 
+async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
+	const videos = await ctx.db
+		.query("videos")
+		.withIndex("by_channel_and_publishedAt", (q) =>
+			q.eq("channelId", channelId),
+		)
+		.order("desc")
+		.take(MAX_CHANNEL_VIDEOS);
+
+	return Promise.all(
+		videos.map(async (video: Doc<"videos">) => {
+			const latestSnapshot = await ctx.db
+				.query("videoSnapshots")
+				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
+				.order("desc")
+				.first();
+			return {
+				durationSec: video.durationSec,
+				publishedAt: video.publishedAt,
+				viewCount: latestSnapshot?.viewCount ?? 0,
+			};
+		}),
+	);
+}
+
+async function shortEnrichmentFor(ctx: QueryCtx, channelId: Id<"channels">) {
+	return ctx.db
+		.query("enrichments")
+		.withIndex("by_channel_and_form", (q) =>
+			q.eq("channelId", channelId).eq("form", "short"),
+		)
+		.unique();
+}
+
 /**
- * The Feed: Proven Listings of the selected form, grouped into the lifecycle
- * columns and sorted by Clonability. The Feed is a shared, global surface, so
- * the form/stage args are only a lens — but it requires an active subscription.
+ * The Feed: visible Channels grouped into lifecycle columns and sorted by
+ * Clonability. It is a shared, global surface and requires an active subscription.
  */
 export const feed = query({
 	args: {
-		form: formValidator,
 		stages: v.optional(v.array(stageValidator)),
 	},
 	handler: async (ctx, args): Promise<FeedGroup[]> => {
 		await requireActiveSubscription(ctx);
 
-		const stageSet = new Set<Stage>(
+		const stageSet = new Set<FeedStage>(
 			args.stages && args.stages.length > 0 ? args.stages : STAGE_ORDER,
 		);
 
-		const provenListings = await ctx.db
-			.query("listings")
-			.withIndex("by_form_and_proven", (q) =>
-				q.eq("form", args.form).eq("proven", true),
-			)
+		const channels = await ctx.db
+			.query("channels")
+			.order("desc")
 			.take(MAX_FEED_CARDS);
 
 		const cards: FeedCard[] = [];
-		for (const listing of provenListings) {
-			if (!stageSet.has(listing.stage)) {
+		for (const channel of channels) {
+			const [videos, enrichment] = await Promise.all([
+				videosForLifecycle(ctx, channel._id),
+				shortEnrichmentFor(ctx, channel._id),
+			]);
+			const lifecycle = deriveChannelLifecycle({
+				subscriberCount: channel.subscriberCount ?? 0,
+				videos,
+				now: Date.now(),
+			});
+			if (
+				lifecycle.feedVisibility === "hidden" ||
+				lifecycle.stage === "tracked" ||
+				!stageSet.has(lifecycle.stage)
+			) {
 				continue;
 			}
-			const channel = await ctx.db.get("channels", listing.channelId);
-			if (channel === null) {
-				continue; // orphaned listing — skip defensively
-			}
 			cards.push({
-				listingId: listing._id,
-				channelId: listing.channelId,
-				form: listing.form,
-				stage: listing.stage,
-				medianViews: listing.medianViews,
-				momentum: listing.momentum,
-				saturation: listing.saturation,
-				clonability: listing.clonability,
-				signals: listing.signals,
+				channelId: channel._id,
+				stage: lifecycle.stage,
+				evidence: lifecycle.evidence,
+				clonability: computeClonability(enrichment?.signals ?? null, "short"),
+				signals: enrichment?.signals ?? null,
 				channel: {
 					ytId: channel.ytId,
 					title: channel.title,

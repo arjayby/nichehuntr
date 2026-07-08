@@ -11,7 +11,7 @@ function titles(
 }
 
 describe("seed", () => {
-	it("drives the full path so the Feed renders Proven Listings", async () => {
+	it("drives the full path so the Feed renders visible lifecycle Channels", async () => {
 		const t = createGatedTest();
 		const summary = await t.mutation(internal.seed.seed, {});
 
@@ -21,20 +21,13 @@ describe("seed", () => {
 		expect(summary.provenListings).toBe(4);
 
 		const asUser = await asSubscribedOperator(t);
-		const shortTitles = titles(
-			await asUser.query(api.feed.feed, { form: "short" }),
-		);
-		const longTitles = titles(
-			await asUser.query(api.feed.feed, { form: "long" }),
-		);
+		const feedTitles = titles(await asUser.query(api.feed.feed, {}));
 
-		expect(shortTitles).toEqual(
+		expect(feedTitles).toEqual(
 			expect.arrayContaining(["AI Horror Shorts", "Faceless Empire"]),
 		);
-		expect(longTitles).toEqual(
-			expect.arrayContaining(["Deep Finance Breakdowns", "Faceless Empire"]),
-		);
-		expect([...shortTitles, ...longTitles]).not.toContain("One-Hit Wonder");
+		expect(feedTitles).not.toContain("Deep Finance Breakdowns");
+		expect(feedTitles).not.toContain("One-Hit Wonder");
 	});
 
 	it("is idempotent — re-running replaces rather than duplicates", async () => {

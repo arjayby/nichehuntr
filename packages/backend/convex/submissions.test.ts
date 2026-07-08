@@ -95,11 +95,20 @@ function unusableAdapter(): YouTubeAdapter {
 	};
 }
 
-/** Titles of every card the feed returned, across all columns. */
-function titles(
-	groups: { cards: { channel: { title: string } }[] }[],
-): string[] {
-	return groups.flatMap((g) => g.cards).map((c) => c.channel.title);
+/** Channel titles with a derived Listing for a form. */
+async function listingTitles(
+	t: Awaited<ReturnType<typeof setup>>["t"],
+	form: "short" | "long",
+): Promise<string[]> {
+	return t.run(async (ctx) => {
+		const channels = await ctx.db.query("channels").collect();
+		const titleById = new Map(channels.map((c) => [c._id, c.title]));
+		const listings = await ctx.db.query("listings").collect();
+		return listings
+			.filter((listing) => listing.form === form && listing.proven)
+			.map((listing) => titleById.get(listing.channelId))
+			.filter((title): title is string => title !== undefined);
+	});
 }
 
 /** A gated instance with a signed-in Admin and a subscribed Operator: the Admin
@@ -139,8 +148,8 @@ async function submissionRow(
 }
 
 describe("runSubmission — the ingest spine", () => {
-	it("tracks a proven channel and surfaces it as a Feed card", async () => {
-		const { t, admin, operator } = await setup();
+	it("tracks a proven channel and derives its Listing", async () => {
+		const { t, admin } = await setup();
 		const id = ucId("proven");
 		const submissionId = await runOver(
 			t,
@@ -163,9 +172,7 @@ describe("runSubmission — the ingest spine", () => {
 			outcome: { listings: 1, proven: 1 },
 		});
 
-		const longTitles = titles(
-			await operator.query(api.feed.feed, { form: "long" }),
-		);
+		const longTitles = await listingTitles(t, "long");
 		expect(longTitles).toContain("Proven Channel");
 	});
 
@@ -195,7 +202,7 @@ describe("runSubmission — the ingest spine", () => {
 	});
 
 	it("yields two Listings for a channel proven in both forms", async () => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("both");
 		const submissionId = await runOver(
 			t,
@@ -223,16 +230,12 @@ describe("runSubmission — the ingest spine", () => {
 
 		const row = await submissionRow(admin, submissionId);
 		expect(row?.outcome).toEqual({ listings: 2, proven: 2 });
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).toContain("Both Forms");
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "short" })),
-		).toContain("Both Forms");
+		expect(await listingTitles(t, "long")).toContain("Both Forms");
+		expect(await listingTitles(t, "short")).toContain("Both Forms");
 	});
 
 	it("tracks (not fails) a channel that ingests but misses the Proven gate", async () => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("weak");
 		const submissionId = await runOver(
 			t,
@@ -255,13 +258,11 @@ describe("runSubmission — the ingest spine", () => {
 		});
 		expect(row?.failureReason).toBeNull();
 
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).not.toContain("Weak Channel");
+		expect(await listingTitles(t, "long")).not.toContain("Weak Channel");
 	});
 
 	it("tracks a proven channel pasted as a /channel/ URL", async () => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("urlchan");
 		const submissionId = await runOver(
 			t,
@@ -283,16 +284,14 @@ describe("runSubmission — the ingest spine", () => {
 			resolvedYtChannelId: id,
 			outcome: { listings: 1, proven: 1 },
 		});
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).toContain("URL Channel");
+		expect(await listingTitles(t, "long")).toContain("URL Channel");
 	});
 
 	it.each([
 		["a bare @handle", "@mrbeast"],
 		["an @handle URL", "https://youtube.com/@mrbeast"],
 	])("resolves %s to its id and tracks the channel", async (_label, paste) => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("handle");
 		const submissionId = await runOver(
 			t,
@@ -315,9 +314,7 @@ describe("runSubmission — the ingest spine", () => {
 			resolvedYtChannelId: id,
 			outcome: { listings: 1, proven: 1 },
 		});
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).toContain("Handle Channel");
+		expect(await listingTitles(t, "long")).toContain("Handle Channel");
 	});
 
 	it("fails a handle no channel owns with a resolve reason", async () => {
@@ -419,7 +416,7 @@ describe("runSubmission — the ingest spine", () => {
 	});
 
 	it("re-submitting a tracked channel refreshes it — fresh data, no duplicate", async () => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("restale");
 
 		// First submission: the channel ingests but its uploads miss the Proven
@@ -441,9 +438,7 @@ describe("runSubmission — the ingest spine", () => {
 			listings: 1,
 			proven: 0,
 		});
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).not.toContain("Refreshable");
+		expect(await listingTitles(t, "long")).not.toContain("Refreshable");
 
 		// Re-submit the same channel, now proven. The shared write path patches in
 		// place by ytId, recording fresh snapshots and recomputing Listings — the
@@ -481,13 +476,11 @@ describe("runSubmission — the ingest spine", () => {
 			listings: 1,
 			snapshots: 10,
 		});
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).toContain("Refreshable");
+		expect(await listingTitles(t, "long")).toContain("Refreshable");
 	});
 
 	it("moves a failed Submission forward when the worker is re-run", async () => {
-		const { t, admin, operator } = await setup();
+		const { t, admin } = await setup();
 		const id = ucId("retryok");
 		const page = uploads(id, {
 			count: 5,
@@ -514,7 +507,7 @@ describe("runSubmission — the ingest spine", () => {
 		expect((await submissionRow(admin, submissionId))?.status).toBe("failed");
 
 		// Re-running the worker over the same row (what retry schedules) with the
-		// API now healthy tracks it and surfaces the Feed card — no re-paste needed.
+		// API now healthy tracks it and derives the Listing — no re-paste needed.
 		await t.action((ctx) =>
 			runSubmission(ctx, stubAdapter({ title: "Retried", page }), submissionId),
 		);
@@ -525,9 +518,7 @@ describe("runSubmission — the ingest spine", () => {
 			outcome: { listings: 1, proven: 1 },
 		});
 		expect(row?.failureReason).toBeNull();
-		expect(
-			titles(await operator.query(api.feed.feed, { form: "long" })),
-		).toContain("Retried");
+		expect(await listingTitles(t, "long")).toContain("Retried");
 	});
 });
 

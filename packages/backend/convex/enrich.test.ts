@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
-
-import { type Operator, setup } from "../test/harness";
-import { api } from "./_generated/api";
+import { setup } from "../test/harness";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { runEnrich } from "./enrich";
-import type { FeedCard, FeedGroup } from "./feed";
 import type {
 	EnrichmentAdapter,
 	EnrichmentInput,
 	Signals,
 } from "./model/clonability";
+import type { Form } from "./model/deriveListings";
 import { recomputeListingsForChannel } from "./model/listings";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -79,22 +77,34 @@ const longSignals = (enterprise: number, improvable: number): Signals => ({
 	improvable: { score: improvable, rationale: "thumbnails are weak" },
 });
 
-function cardByTitle(groups: FeedGroup[], title: string): FeedCard | undefined {
-	return groups.flatMap((g) => g.cards).find((c) => c.channel.title === title);
+async function listingByTitle(
+	t: Awaited<ReturnType<typeof setup>>["t"],
+	title: string,
+	form: Form = "long",
+) {
+	return t.run(async (ctx) => {
+		const channels = await ctx.db.query("channels").collect();
+		const channel = channels.find((row) => row.title === title);
+		if (channel === undefined) {
+			return null;
+		}
+		const listings = await ctx.db
+			.query("listings")
+			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
+			.collect();
+		return listings.find((row) => row.form === form) ?? null;
+	});
 }
 
-const longFeed = (operator: Operator) =>
-	operator.query(api.feed.feed, { form: "long" });
-
 describe("runEnrich — Clonability scoring", () => {
-	it("rides a Clonability score and rationales onto the feed card", async () => {
-		const { t, operator } = await setup();
+	it("rides a Clonability score and rationales onto the Listing", async () => {
+		const { t } = await setup();
 		await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "fin", title: "Deep Finance" }),
 		);
 
 		// Proven and Breaking Out, but no Clonability yet (graceful degradation).
-		const before = cardByTitle(await longFeed(operator), "Deep Finance");
+		const before = await listingByTitle(t, "Deep Finance");
 		expect(before?.clonability).toBeNull();
 		expect(before?.signals).toBeNull();
 		expect(before?.stage).toBe("breaking_out");
@@ -103,23 +113,23 @@ describe("runEnrich — Clonability scoring", () => {
 		const result = await t.action((ctx) => runEnrich(ctx, adapter));
 		expect(result).toEqual({ enriched: 1, failed: 0 });
 
-		const after = cardByTitle(await longFeed(operator), "Deep Finance");
+		const after = await listingByTitle(t, "Deep Finance");
 		expect(after?.clonability).toBe(60); // (80 + 40) / 2
 		expect(after?.signals?.enterprise_value?.rationale).toBe("high-CPM niche");
 		// Enrichment never gates and never moves Stage (ADR-0003).
 		expect(after?.stage).toBe("breaking_out");
 	});
 
-	it("still renders a proven Listing that has never been enriched", async () => {
-		const { t, operator } = await setup();
+	it("keeps a proven Listing visible to downstream reads before enrichment", async () => {
+		const { t } = await setup();
 		await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "raw", title: "Unenriched" }),
 		);
 
-		const card = cardByTitle(await longFeed(operator), "Unenriched");
-		expect(card).toBeDefined();
-		expect(card?.clonability).toBeNull();
-		expect(card?.signals).toBeNull();
+		const listing = await listingByTitle(t, "Unenriched");
+		expect(listing?.proven).toBe(true);
+		expect(listing?.clonability).toBeNull();
+		expect(listing?.signals).toBeNull();
 	});
 
 	it("passes the channel's thumbnails to the adapter", async () => {
@@ -173,29 +183,27 @@ describe("runEnrich — caching & material change", () => {
 	});
 
 	it("preserves Clonability across a later recompute (survives the clobber)", async () => {
-		const { t, operator } = await setup();
+		const { t } = await setup();
 		const channelId = await t.run((ctx) =>
 			addStrongChannel(ctx, { ytId: "keep", title: "Keep Me" }),
 		);
 
 		const { adapter } = stubEnrichment(() => longSignals(90, 30));
 		await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(cardByTitle(await longFeed(operator), "Keep Me")?.clonability).toBe(
-			60,
-		);
+		expect((await listingByTitle(t, "Keep Me"))?.clonability).toBe(60);
 
 		// A later pipeline tick deletes and re-inserts this channel's Listings.
 		await t.run((ctx) => recomputeListingsForChannel(ctx, channelId));
 
-		const card = cardByTitle(await longFeed(operator), "Keep Me");
-		expect(card?.clonability).toBe(60); // re-applied from the cache, not lost
-		expect(card?.signals?.enterprise_value?.score).toBe(90);
+		const listing = await listingByTitle(t, "Keep Me");
+		expect(listing?.clonability).toBe(60); // re-applied from the cache, not lost
+		expect(listing?.signals?.enterprise_value?.score).toBe(90);
 	});
 });
 
 describe("runEnrich — within-column ranking", () => {
 	it("sorts a Stage column by Clonability so the strongest clone target leads", async () => {
-		const { t, operator } = await setup();
+		const { t } = await setup();
 		await t.run(async (ctx) => {
 			await addStrongChannel(ctx, { ytId: "lo", title: "Low Clone" });
 			await addStrongChannel(ctx, { ytId: "hi", title: "High Clone" });
@@ -208,10 +216,17 @@ describe("runEnrich — within-column ranking", () => {
 		);
 		await t.action((ctx) => runEnrich(ctx, adapter));
 
-		const column = (await longFeed(operator)).find(
-			(g) => g.stage === "breaking_out",
+		const listings = await t.run(async (ctx) => {
+			const channels = await ctx.db.query("channels").collect();
+			const names = new Map(channels.map((c) => [c._id, c.title]));
+			return (await ctx.db.query("listings").collect())
+				.filter((listing) => listing.stage === "breaking_out")
+				.sort((a, b) => (b.clonability ?? -1) - (a.clonability ?? -1))
+				.map((listing) => names.get(listing.channelId));
+		});
+		const titles = listings.filter(
+			(title): title is string => title !== undefined,
 		);
-		const titles = column?.cards.map((c) => c.channel.title) ?? [];
 		expect(titles.indexOf("High Clone")).toBeLessThan(
 			titles.indexOf("Low Clone"),
 		);
