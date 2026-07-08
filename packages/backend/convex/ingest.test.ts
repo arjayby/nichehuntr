@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setup as harnessSetup } from "../test/harness";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { runSnapshot } from "./ingest";
 import type { Stage } from "./model/deriveListings";
 import type { YouTubeAdapter } from "./model/youtube";
@@ -55,17 +55,28 @@ function stubAdapter(cfg: { statViews?: number }): YouTubeAdapter {
 	};
 }
 
-/** Titles of every card the feed returned, across all columns. */
-function titles(
-	groups: { cards: { channel: { title: string } }[] }[],
-): string[] {
-	return groups.flatMap((g) => g.cards).map((c) => c.channel.title);
-}
-
-/** A convex-test instance with a subscribed Operator able to read the Feed. */
+/** A convex-test instance with a subscribed Operator for gated paths. */
 async function setup() {
 	const { t, operator: asUser } = await harnessSetup();
 	return { t, asUser };
+}
+
+async function listingByTitle(
+	t: Awaited<ReturnType<typeof setup>>["t"],
+	title: string,
+) {
+	return t.run(async (ctx) => {
+		const channels = await ctx.db.query("channels").collect();
+		const channel = channels.find((row) => row.title === title);
+		if (channel === undefined) {
+			return null;
+		}
+		const listings = await ctx.db
+			.query("listings")
+			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
+			.collect();
+		return listings.find((row) => row.form === "long") ?? null;
+	});
 }
 
 /** Intake a channel's uploads through the shared write path (the Submission
@@ -85,8 +96,8 @@ async function ingest(
 }
 
 describe("upsertDiscovered — channel/video/snapshot write path", () => {
-	it("turns ingested uploads into a Proven Listing visible in the Feed", async () => {
-		const { t, asUser } = await setup();
+	it("turns ingested uploads into a Proven Listing", async () => {
+		const { t } = await setup();
 		const result = await ingest(
 			t,
 			longVideos("chan_proven", {
@@ -101,14 +112,13 @@ describe("upsertDiscovered — channel/video/snapshot write path", () => {
 			channelsRecomputed: 1,
 		});
 
-		const longTitles = titles(
-			await asUser.query(api.feed.feed, { form: "long" }),
-		);
-		expect(longTitles).toContain("chan_proven title");
+		expect(await listingByTitle(t, "chan_proven title")).toMatchObject({
+			proven: true,
+		});
 	});
 
-	it("does not surface a channel whose median misses the Proven threshold", async () => {
-		const { t, asUser } = await setup();
+	it("keeps a channel unproven when its median misses the threshold", async () => {
+		const { t } = await setup();
 		await ingest(
 			t,
 			longVideos("chan_weak", {
@@ -118,10 +128,9 @@ describe("upsertDiscovered — channel/video/snapshot write path", () => {
 			}),
 		);
 
-		const longTitles = titles(
-			await asUser.query(api.feed.feed, { form: "long" }),
-		);
-		expect(longTitles).not.toContain("chan_weak title");
+		expect(await listingByTitle(t, "chan_weak title")).toMatchObject({
+			proven: false,
+		});
 	});
 
 	it("is idempotent — re-ingesting patches rather than duplicating", async () => {
@@ -143,10 +152,10 @@ describe("upsertDiscovered — channel/video/snapshot write path", () => {
 		expect(counts).toEqual({ channels: 1, videos: 5, listings: 1 });
 	});
 
-	it("drops a channel from the Feed once newer weak uploads sink its median", async () => {
-		const { t, asUser } = await setup();
+	it("drops a channel's Proven verdict once newer weak uploads sink its median", async () => {
+		const { t } = await setup();
 
-		// First pass: five strong, older uploads ⇒ Proven, in the Feed.
+		// First pass: five strong, older uploads ⇒ Proven.
 		await ingest(
 			t,
 			longVideos("chan_fade", {
@@ -156,9 +165,9 @@ describe("upsertDiscovered — channel/video/snapshot write path", () => {
 				tag: "strong",
 			}),
 		);
-		expect(
-			titles(await asUser.query(api.feed.feed, { form: "long" })),
-		).toContain("chan_fade title");
+		expect(await listingByTitle(t, "chan_fade title")).toMatchObject({
+			proven: true,
+		});
 
 		// Refresh: a dozen newer but weak uploads fill the Proven window and drag
 		// the median below the threshold.
@@ -171,15 +180,15 @@ describe("upsertDiscovered — channel/video/snapshot write path", () => {
 				tag: "weak",
 			}),
 		);
-		expect(
-			titles(await asUser.query(api.feed.feed, { form: "long" })),
-		).not.toContain("chan_fade title");
+		expect(await listingByTitle(t, "chan_fade title")).toMatchObject({
+			proven: false,
+		});
 	});
 });
 
 describe("runSnapshot", () => {
 	it("re-samples tracked videos and refreshes the derived median", async () => {
-		const { t, asUser } = await setup();
+		const { t } = await setup();
 
 		await ingest(
 			t,
@@ -190,9 +199,8 @@ describe("runSnapshot", () => {
 			}),
 		);
 
-		const medianBefore = (await asUser.query(api.feed.feed, { form: "long" }))
-			.flatMap((g) => g.cards)
-			.find((c) => c.channel.title === "chan_snap title")?.medianViews;
+		const medianBefore = (await listingByTitle(t, "chan_snap title"))
+			?.medianViews;
 		expect(medianBefore).toBe(150_000);
 
 		// Views only climb; a fresh snapshot at 220k should lift the median.
@@ -201,9 +209,8 @@ describe("runSnapshot", () => {
 		);
 		expect(result).toMatchObject({ snapshots: 5, channelsRecomputed: 1 });
 
-		const medianAfter = (await asUser.query(api.feed.feed, { form: "long" }))
-			.flatMap((g) => g.cards)
-			.find((c) => c.channel.title === "chan_snap title")?.medianViews;
+		const medianAfter = (await listingByTitle(t, "chan_snap title"))
+			?.medianViews;
 		expect(medianAfter).toBe(220_000);
 
 		// A second snapshot was appended per video (2 each ⇒ 10 total).
@@ -233,14 +240,11 @@ describe("momentum drives live column placement", () => {
 		const t0 = Date.UTC(2026, 5, 1);
 		vi.setSystemTime(t0);
 
-		const { t, asUser } = await setup();
+		const { t } = await setup();
 
-		/** Which lifecycle column the channel's card currently sits in. */
+		/** Which Listing stage the channel currently sits in. */
 		const columnOf = async (): Promise<Stage | undefined> => {
-			const groups = await asUser.query(api.feed.feed, { form: "long" });
-			return groups.find((g) =>
-				g.cards.some((c) => c.channel.title === "chan_slide title"),
-			)?.stage;
+			return (await listingByTitle(t, "chan_slide title"))?.stage;
 		};
 
 		// Intake: a proven but old, slow-moving channel. With a single snapshot,

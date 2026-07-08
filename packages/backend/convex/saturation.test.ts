@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-
-import { type Operator, setup } from "../test/harness";
-import { api } from "./_generated/api";
+import { setup } from "../test/harness";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import type { FeedCard, FeedGroup } from "./feed";
 import { runEmbed } from "./ingest";
 import { SATURATION_CROWDED } from "./model/deriveListings";
 import {
@@ -84,12 +81,23 @@ function nicheOf(text: string): number {
 	return 2;
 }
 
-function cardByTitle(groups: FeedGroup[], title: string): FeedCard | undefined {
-	return groups.flatMap((g) => g.cards).find((c) => c.channel.title === title);
+async function listingByTitle(
+	t: Awaited<ReturnType<typeof setup>>["t"],
+	title: string,
+) {
+	return t.run(async (ctx) => {
+		const channels = await ctx.db.query("channels").collect();
+		const channel = channels.find((row) => row.title === title);
+		if (channel === undefined) {
+			return null;
+		}
+		const listings = await ctx.db
+			.query("listings")
+			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
+			.collect();
+		return listings.find((row) => row.form === "long") ?? null;
+	});
 }
-
-const longFeed = (operator: Operator) =>
-	operator.query(api.feed.feed, { form: "long" });
 
 describe("runEmbed — embeddings + Saturation", () => {
 	it("backfills an embedding of the index's width per channel", async () => {
@@ -114,7 +122,7 @@ describe("runEmbed — embeddings + Saturation", () => {
 	});
 
 	it("sizes each niche by vector search and lets a crowded one dominate Stage", async () => {
-		const { t, operator } = await setup();
+		const { t } = await setup();
 		// A crowded niche (9 channels ⇒ 8 neighbors each = the crowded band) beside a
 		// sparse one (2 Finance channels ⇒ 1 neighbor each). All are proven with
 		// strong momentum, so only Saturation can move them out of Breaking Out.
@@ -136,31 +144,28 @@ describe("runEmbed — embeddings + Saturation", () => {
 		});
 
 		// Momentum alone would keep every one of them in Breaking Out.
-		expect(cardByTitle(await longFeed(operator), "Horror 0")?.stage).toBe(
-			"breaking_out",
-		);
+		expect((await listingByTitle(t, "Horror 0"))?.stage).toBe("breaking_out");
 
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
 
-		const groups = await longFeed(operator);
-		const horror = cardByTitle(groups, "Horror 0");
+		const horror = await listingByTitle(t, "Horror 0");
 		expect(horror?.saturation).toBe(SATURATION_CROWDED); // 8 similar channels
 		expect(horror?.stage).toBe("established"); // saturation dominates momentum
 
-		const finance = cardByTitle(groups, "Finance 0");
+		const finance = await listingByTitle(t, "Finance 0");
 		expect(finance?.saturation).toBe(1); // one peer — a sparse niche
 		expect(finance?.stage).toBe("breaking_out"); // momentum still wins
 	});
 
 	it("re-measures a channel as its niche fills in across ticks", async () => {
-		const { t, operator } = await setup();
+		const { t } = await setup();
 		await t.run(async (ctx) =>
 			addStrongChannel(ctx, { ytId: "h_first", title: "Horror First" }),
 		);
 
 		// First tick: it is alone in its niche ⇒ Saturation 0, still Breaking Out.
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
-		let card = cardByTitle(await longFeed(operator), "Horror First");
+		let card = await listingByTitle(t, "Horror First");
 		expect(card?.saturation).toBe(0);
 		expect(card?.stage).toBe("breaking_out");
 
@@ -175,7 +180,7 @@ describe("runEmbed — embeddings + Saturation", () => {
 		});
 		await t.action(async (ctx) => runEmbed(ctx, stubEmbeddings(nicheOf)));
 
-		card = cardByTitle(await longFeed(operator), "Horror First");
+		card = await listingByTitle(t, "Horror First");
 		expect(card?.saturation).toBe(SATURATION_CROWDED);
 		expect(card?.stage).toBe("established");
 	});

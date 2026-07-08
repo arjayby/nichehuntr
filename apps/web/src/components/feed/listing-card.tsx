@@ -1,18 +1,27 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
 import { topSignals } from "@nichehuntr/backend/convex/model/clonability";
-import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
+import type { Form } from "@nichehuntr/backend/convex/model/deriveListings";
 import {
 	MOMENTUM_MODEST,
 	MOMENTUM_STRONG,
 	saturationLevel,
 } from "@nichehuntr/backend/convex/model/deriveListings";
+import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
 import {
 	Card,
 	CardContent,
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
-import { Bookmark, ExternalLink, Minus, TrendingUp, Users } from "lucide-react";
+import {
+	Bookmark,
+	CalendarClock,
+	ExternalLink,
+	Minus,
+	TrendingUp,
+	Users,
+	Video,
+} from "lucide-react";
 
 /** Compact view-count formatter shared by Feed cards and the detail pane. */
 export const compactViews = new Intl.NumberFormat("en", {
@@ -30,6 +39,12 @@ export const STAGE_LABELS: Record<FeedCard["stage"], string> = {
 const momentumPct = new Intl.NumberFormat("en", {
 	style: "percent",
 	maximumFractionDigits: 0,
+});
+
+const publishDate = new Intl.DateTimeFormat("en", {
+	month: "short",
+	day: "numeric",
+	year: "numeric",
 });
 
 /**
@@ -156,7 +171,7 @@ export function ClonabilityRead({
  * the Listing is enriched.
  */
 function SignalScores({ card }: { card: FeedCard }) {
-	const tops = topSignals(card.signals, card.form, 2);
+	const tops = topSignals(card.signals, "short", 2);
 	if (tops.length === 0) {
 		return null;
 	}
@@ -179,12 +194,52 @@ function SignalScores({ card }: { card: FeedCard }) {
 	);
 }
 
-/** The form badge shared by Feed cards and Watchlist rows. */
-export function FormBadge({ form }: { form: FeedCard["form"] }) {
+/** The form badge shared by Watchlist rows and the detail pane. */
+export function FormBadge({ form }: { form: Form }) {
 	return (
 		<span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
 			{form}
 		</span>
+	);
+}
+
+function EvidenceRead({ card }: { card: FeedCard }) {
+	const latest = card.evidence.latestShortPublishedAt;
+	return (
+		<div className="grid grid-cols-2 gap-3">
+			<div>
+				<div className="text-muted-foreground text-xs">Subscribers</div>
+				<div className="font-semibold text-lg tabular-nums">
+					{compactViews.format(card.evidence.subscriberCount)}
+				</div>
+			</div>
+			<div className="text-right">
+				<div className="text-muted-foreground text-xs">Recent reach</div>
+				<div className="font-semibold text-lg tabular-nums">
+					{card.evidence.shortsAtOrAbove100k}/
+					{card.evidence.recentShortsChecked}
+				</div>
+				<div className="text-[11px] text-muted-foreground">100K+ Shorts</div>
+			</div>
+			<div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+				<Video className="size-3.5" aria-hidden />
+				<span className="tabular-nums">
+					{card.evidence.fetchedShorts} Shorts fetched
+				</span>
+			</div>
+			<div className="flex items-center justify-end gap-1.5 text-muted-foreground text-xs">
+				<CalendarClock className="size-3.5" aria-hidden />
+				<span className="truncate">
+					{latest === null ? "No Shorts yet" : publishDate.format(latest)}
+				</span>
+			</div>
+			<div className="col-span-2 flex items-center justify-between rounded-md bg-muted/60 px-2 py-1 text-xs">
+				<span className="text-muted-foreground">50K+ Shorts</span>
+				<span className="font-medium tabular-nums">
+					{card.evidence.shortsAtOrAbove50k}/{card.evidence.recentShortsChecked}
+				</span>
+			</div>
+		</div>
 	);
 }
 
@@ -216,11 +271,9 @@ export function ListingCard({
 	onToggleSave: (card: FeedCard) => void;
 	onOpen: (selection: WatchlistSelection) => void;
 }) {
-	// The whole card opens the channel-detail modal now (the old YouTube link
-	// moved to the explicit external-link icon). A div + button role keeps the
-	// trailing bookmark/external controls as their own tab stops rather than
-	// nesting them inside a card-wide anchor.
-	const open = () => onOpen({ channelId: card.channelId, form: card.form });
+	// The Feed is channel-based; existing detail/watchlist surfaces still use the
+	// Shorts selection for this card until their own channel-only migration.
+	const open = () => onOpen({ channelId: card.channelId, form: "short" });
 	return (
 		<Card
 			size="sm"
@@ -292,21 +345,12 @@ export function ListingCard({
 								<ExternalLink className="size-4" />
 							</a>
 						</div>
-						<MomentumIndicator momentum={card.momentum} />
+						<ClonabilityRead clonability={card.clonability} />
 					</div>
 				</div>
 			</CardHeader>
 			<CardContent>
-				<div className="flex items-end justify-between gap-3">
-					<div>
-						<div className="text-muted-foreground text-xs">Median views</div>
-						<div className="font-semibold text-lg tabular-nums">
-							{compactViews.format(card.medianViews)}
-						</div>
-					</div>
-					<SaturationRead saturation={card.saturation} />
-					<ClonabilityRead clonability={card.clonability} />
-				</div>
+				<EvidenceRead card={card} />
 				<SignalScores card={card} />
 			</CardContent>
 		</Card>

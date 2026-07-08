@@ -20,6 +20,9 @@ export default defineSchema({
 		handle: v.optional(v.string()),
 		avatarUrl: v.optional(v.string()),
 		description: v.optional(v.string()),
+		// YouTube's public subscriber count. Optional for pre-cutover rows and
+		// channels whose stats are hidden; lifecycle derivation treats missing as 0.
+		subscriberCount: v.optional(v.number()),
 		// Content embedding powering Saturation via the vector index below
 		// (ADR-0003). Null until the embed cron backfills it.
 		embedding: v.optional(v.array(v.float64())),
