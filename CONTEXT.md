@@ -13,11 +13,11 @@ The Operator's target action: build a new channel that replicates a discovered c
 _Avoid_: Acquire, buy.
 
 **Channel**:
-The underlying YouTube entity we discover and track. It is _not_ the scored unit — see [[Listing]]. A channel is never forced into a category taxonomy.
+The short-form YouTube entity we discover, score, stage, and show as a clone target. In NicheHuntr, short-form means videos up to 300 seconds. A channel is never forced into a category taxonomy.
 _Avoid_: Account, creator (when referring to the discovered entity).
 
 **Listing**:
-A `(Channel, Form)` pair — the atomic unit that is gated, staged, scored, and shown as a card. A channel's videos are partitioned by duration, and [[Proven]], [[Momentum]], [[Saturation]], [[Stage]], and [[Clonability]] are computed **per form** over just that form's videos. A channel yields up to two Listings and can straddle (e.g. Breaking Out in short-form while Established in long-form). Filtering by form selects Listings. Most channels produce exactly one Listing. See ADR-0002.
+Deprecated language from the earlier long-form/short-form design. The product now treats the [[Channel]] itself as the scored unit because NicheHuntr tracks short-form channels only.
 _Avoid_: Entry, card, row.
 
 **Niche**:
@@ -29,7 +29,7 @@ The single global, shared discovery surface — one canonical set of tracked Cha
 _Avoid_: Dashboard, my channels.
 
 **Watchlist**:
-The Operator's private, curated set of clone candidates, saved from Feed cards. A watchlist entry is an `(Operator, Channel, Form)` triple — channel-anchored but form-scoped, so the two faces of a straddling channel are two distinct entries, and entries survive Listing recomputes. A _lens_ on the [[Feed]]: entries point into the shared dataset and re-derive live Listing data at read time; nothing is copied or frozen.
+The Operator's private, curated set of clone candidates, saved from Feed cards. A watchlist entry points to an `(Operator, Channel)` pair. A _lens_ on the [[Feed]]: entries point into the shared dataset and re-derive live Channel data at read time; nothing is copied or frozen.
 _Avoid_: Saved channels, favorites, bookmarks.
 
 **Folder**:
@@ -44,41 +44,49 @@ _Avoid_: Superuser, moderator, owner.
 An [[Admin]]'s request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. Replaces automated discovery (ADR-0005) as the sole way a channel enters the system. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel, doubling as a manual refresh.
 _Avoid_: Queue, request, candidate.
 
+**Tracked**:
+A channel that has been ingested and remains in the shared dataset, whether or not it currently qualifies for a lifecycle column. Tracked channels that miss the lifecycle rules are hidden from the Feed rather than treated as failed submissions.
+_Avoid_: Failed, rejected.
+
 ## Discovery pipeline
 
-The three columns are a left-to-right **momentum lifecycle**: a channel's position is a function of **momentum** and **saturation**, so the Operator can time their clone. It is _not_ three independent sorted feeds.
+The three columns are a left-to-right **channel lifecycle**: a channel's position is a function of its recent short-form reach and channel maturity, so the Operator can time their clone. It is _not_ three independent sorted feeds.
 
 **Stage**:
-A listing's position in the momentum lifecycle. One of Emerging, Breaking Out, or Established. Derived from [[Momentum]] + [[Saturation]], not assigned manually, with **saturation dominating**: a crowded niche is Established regardless of momentum. Otherwise strong momentum ⇒ Breaking Out, modest positive momentum ⇒ Emerging, flat/declining ⇒ Established. All thresholds are tunable.
+A channel's position in the lifecycle. One of Emerging, Breaking Out, or Established. Derived from [[Recent Reach]] and channel maturity, not assigned manually. Precedence is Established, then Breaking Out, then Emerging; channels that match none remain [[Tracked]] and hidden from the Feed.
 
 **Emerging** (column 1):
-A channel whose recent uploads are accelerating relative to its own [[Baseline]], with low saturation. Operator's read: risky, but first-mover. Note: _not_ "brand new to YouTube" — emergence is detected as acceleration within the admin-submitted set, not never-before-seen channels.
+A short-form channel whose latest Short was published within the last 14 days and whose recent Shorts are already clearing the lower recent-reach bar, but not the Breaking Out reach bar. If the channel has 10 or more fetched Shorts, at least 5 of the latest 10 must meet that bar; if it has 3-9 fetched Shorts, at least half rounded up must meet it. Operator's read: risky, but early.
 
 **Breaking Out** (column 2):
-[[Proven]], strong momentum, still low saturation. The sweet spot — clone _now_.
+A short-form channel whose latest Short was published within the last 14 days and whose recent Shorts are clearing the higher recent-reach bar, but that has not yet met the Established maturity cutoff. If the channel has 10 or more fetched Shorts, at least 5 of the latest 10 must meet that bar; if it has 3-9 fetched Shorts, at least half rounded up must meet it. The sweet spot — clone _now_.
 
 **Established** (column 3):
-Too late to clone — from _either_ direction: the niche is crowded (high saturation) **or** its momentum has cooled/flattened. High saturation overrides even strong momentum.
+A short-form channel with Breaking Out-level recent reach that has already accumulated a mature audience and upload catalog: at least 50,000 subscribers and at least 50 fetched Shorts. It uses the same 100,000-view recent-reach rule as Breaking Out, but unlike Emerging and Breaking Out, Established does not require the latest Short to have been published within the last 14 days.
 
 **Snapshot**:
-A point-in-time record of a tracked channel/video's view count at a timestamp. The system re-samples on a schedule and stores snapshots so momentum (a derivative) can be computed — the YouTube API only returns current counts, never history. See ADR-0001.
+Deprecated language from the earlier acceleration-based lifecycle. The simplified short-form lifecycle reads current video stats on refresh and does not require a view-count time series.
 
 **Baseline**:
-A channel's own historical norm for per-video performance (e.g. median views-per-video). Recent uploads are compared against it to detect acceleration. Momentum is relative to a channel's _own_ baseline, not to other channels.
+A deprecated signal from the earlier acceleration-based lifecycle. The simplified short-form lifecycle reads recent view counts directly instead of comparing against a historical norm.
 
-**Momentum**:
-How fast a channel's recent per-video viewership is accelerating relative to its own [[Baseline]], computed from the slope across [[Snapshot]]s. The primary axis of Stage. Newly discovered channels are seeded with a `views ÷ video-age` proxy until real snapshots accumulate. (Precise signal still TBD.)
-_Avoid_: Trending, hype.
+**Recent Reach**:
+How many views a channel's recent Shorts have already earned, measured from raw current per-video view counts without age adjustment. The lifecycle reads the latest 10 Shorts when available; channels with 3-9 fetched Shorts can still qualify if at least half rounded up meet the stage's view threshold, while channels with fewer than 3 fetched Shorts stay [[Tracked]] and hidden. Long-form uploads are ignored for recent-reach and latest-upload checks.
+_Avoid_: Momentum, velocity, percent per day, trending, hype.
+
+**Lifecycle Evidence**:
+The plain counters that explain a channel's stage: subscriber count, fetched Shorts count, latest Short publish date, number of recent Shorts checked, number above 50,000 views, and number above 100,000 views. These replace baseline, momentum, saturation, Proven, form, and long-form metrics on the card.
+_Avoid_: Advanced metrics, technical indicators.
 
 **Proven** (the gate):
-The single hard entry gate to the Feed — the only criterion that can _exclude_ a channel. Objective proof the niche works. Precise rule: take the channel's **last ~12 uploads**, drop videos too fresh to have settled (< ~7 days old) and non-standard items (live streams, etc.); the gate passes if the **median per-video view count** of that window ≥ a **form-specific, tunable threshold**. Median (not mean) is what makes it _consistent_ — robust to a single viral fluke or one dud. Thresholds default to **100k for long-form** and a higher default (~500k) for **short-form**, since a Short hitting 100k is near-trivial. Staleness (was huge years ago, dead now) fails the gate.
+Deprecated language from the earlier gate-first design. The simplified short-form lifecycle no longer has a separate Proven gate; a channel is visible when it qualifies for Emerging, Breaking Out, or Established, and otherwise remains [[Tracked]] and hidden.
 _Metric note_: "100k" always means 100,000 views on an individual video, never channel totals or subscribers.
 
 **Enrichment**:
-The per-[[Listing]] AI pass that produces the subjective signals: a single **multimodal Claude call** over the channel's metadata, recent video titles, and recent **thumbnail images**, returning a structured per-signal score (0–100) plus a one-line rationale each. Runs per form (form-specific signal set). Feeds [[Clonability]]. Transcripts are deliberately out of scope — too costly for marginal gain on these particular judgments. (Cadence TBD.)
+The per-[[Channel]] AI pass that produces short-form subjective signals: a single multimodal call over the channel's metadata, recent video titles, and recent thumbnail images, returning a structured per-signal score plus a one-line rationale each. Feeds [[Clonability]] but never determines lifecycle stage or feed visibility.
 
 **Clonability**:
-An overall per-[[Listing]] score synthesizing the _subjective_ [[Enrichment]] signals into how attractive a clone target is. Computed as a **tunable weighted mean** of the form's applicable signals (0–100), starting near-equal but biasing [[Automatable]] highest for short-form. Signal sets — short-form: [[Automatable]] + [[Transformative]] + [[Improvable]]; long-form: [[Enterprise value]] + [[Improvable]]. Rides on the card and sharpens ranking _within_ a column; it never gates. Degrades gracefully — a listing appears on the strength of the [[Proven]] gate even before its Clonability signals are computed.
+An overall per-[[Channel]] score synthesizing the subjective [[Enrichment]] signals into how attractive a short-form clone target is. Computed as a tunable weighted mean of [[Automatable]], [[Transformative]], and [[Improvable]]; it sharpens ranking and detail views within a lifecycle stage but never gates. Degrades gracefully: a channel can appear before its Clonability signals are computed.
 _Avoid_: Quality score, rating.
 
 **Automatable** (short-form signal):
@@ -91,8 +99,8 @@ Repackages _existing_ material (compilations, reactions, edits, AI remixes) rath
 Visible headroom to out-execute — lazy thumbnails, weak editing, shallow content — while the channel is _still winning_. High = easy to beat.
 
 **Enterprise value** (long-form signal):
-The niche pulls high-CPM/RPM or B2B/enterprise monetization (finance, software, industry education, high-ticket) versus low-value broad entertainment.
+Deprecated long-form signal from the earlier mixed-form design.
 
 **Saturation**:
-How many comparable channels already exist in the same (implicit) niche. The secondary axis of Stage; high saturation pushes a channel toward Established. Measured as the count of tracked channels whose content embedding falls within a similarity threshold (nearest-neighbor cluster size via Convex vector search) — this keeps niche implicit while still counting competitors. On a small admin-curated catalog it cold-starts weak (few neighbors ⇒ low saturation) until the catalog grows (ADR-0005).
+Deprecated language from the earlier competitor-counting design. The simplified short-form lifecycle does not measure comparable channels, competitor counts, or niche crowdedness.
 _Avoid_: Competition, crowdedness.
