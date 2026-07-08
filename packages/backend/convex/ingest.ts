@@ -163,6 +163,7 @@ export const upsertDiscovered = internalMutation({
 				durationSec: video.durationSec,
 				form: classifyForm(video.durationSec),
 				isStandard: video.isStandard,
+				currentViewCount: video.viewCount,
 			};
 			const existing = await ctx.db
 				.query("videos")
@@ -238,6 +239,9 @@ export const recordSnapshots = internalMutation({
 			if (video === null) {
 				continue; // untracked video — nothing to snapshot
 			}
+			await ctx.db.patch("videos", video._id, {
+				currentViewCount: reading.viewCount,
+			});
 			await ctx.db.insert("videoSnapshots", {
 				videoId: video._id,
 				viewCount: reading.viewCount,

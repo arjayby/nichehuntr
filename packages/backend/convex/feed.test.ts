@@ -32,6 +32,7 @@ async function addVideo(
 		viewCount: number;
 		publishedAt: number;
 		durationSec?: number;
+		writeSnapshot?: boolean;
 	},
 ) {
 	const videoId = await ctx.db.insert("videos", {
@@ -41,13 +42,16 @@ async function addVideo(
 		durationSec: opts.durationSec ?? 45,
 		form: (opts.durationSec ?? 45) <= 300 ? "short" : "long",
 		publishedAt: opts.publishedAt,
+		currentViewCount: opts.viewCount,
 		isStandard: true,
 	});
-	await ctx.db.insert("videoSnapshots", {
-		videoId,
-		viewCount: opts.viewCount,
-		at: Date.now(),
-	});
+	if (opts.writeSnapshot ?? true) {
+		await ctx.db.insert("videoSnapshots", {
+			videoId,
+			viewCount: opts.viewCount,
+			at: Date.now(),
+		});
+	}
 	return videoId;
 }
 
@@ -214,6 +218,36 @@ describe("feed query", () => {
 		expect(card).not.toHaveProperty("baseline");
 		expect(card).not.toHaveProperty("momentum");
 		expect(card).not.toHaveProperty("saturation");
+	});
+
+	it("derives recent reach from current video counts without requiring snapshots", async () => {
+		const { t, operator } = await setup();
+		await t.run(async (ctx) => {
+			const channelId = await addChannel(ctx, "Current Count Channel");
+			for (const [index, viewCount] of [120_000, 130_000, 40_000].entries()) {
+				await addVideo(ctx, {
+					channelId,
+					title: `current count ${index}`,
+					viewCount,
+					publishedAt: Date.now() - (index + 1) * DAY,
+					writeSnapshot: false,
+				});
+			}
+		});
+
+		const [card] = cardsForStage(
+			await operator.query(api.feed.feed, {}),
+			"breaking_out",
+		);
+
+		expect(card).toMatchObject({
+			stage: "breaking_out",
+			channel: { title: "Current Count Channel" },
+			evidence: {
+				shortsAtOrAbove100k: 2,
+				recentShortsChecked: 3,
+			},
+		});
 	});
 
 	it("sorts within a stage by clonability and keeps unscored channels last", async () => {
