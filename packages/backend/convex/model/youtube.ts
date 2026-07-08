@@ -8,6 +8,8 @@
  * this file is deliberately thin and is not richly tested against the network.
  */
 
+import { SHORT_MAX_SEC } from "./channelLifecycle";
+
 const YT_API_BASE = "https://www.googleapis.com/youtube/v3";
 
 /** YouTube caps `id`-list requests at 50 ids per unit of quota (ADR-0001). */
@@ -27,10 +29,9 @@ export type ChannelInfo = {
 export type VideoStat = { ytVideoId: string; viewCount: number };
 
 /**
- * One backfilled upload — the shape the shared write path (`upsertDiscovered`)
- * ingests. Hydrated from `videos.list` so it carries duration (→ Form), a fresh
- * view count (→ first Snapshot), and standardness (live streams/premieres, which
- * the Proven gate excludes).
+ * One backfilled short-form upload — the shape the shared write path
+ * (`upsertDiscovered`) ingests. Hydrated from `videos.list` so it carries
+ * duration, a fresh view count, and standardness (live streams/premieres).
  */
 export type ChannelUpload = {
 	ytVideoId: string;
@@ -49,7 +50,7 @@ export type ChannelUpload = {
  * The seam the ingestion upkeep and the Submission worker depend on. Real
  * implementation talks to YouTube; tests pass a stub so no network is hit.
  * Automated discovery is gone (ADR-0005): this is channel metadata, the snapshot
- * stats refresh, and `fetchChannelUploads` — the Submission backfill.
+ * stats refresh, and `fetchChannelUploads` — the Submission backfill of Shorts.
  */
 export type YouTubeAdapter = {
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
@@ -129,7 +130,7 @@ type ChannelResource = {
 	};
 };
 
-type ListResponse<T> = { items?: T[] };
+type ListResponse<T> = { items?: T[]; nextPageToken?: string };
 
 /** Prefer the crispest thumbnail YouTube offers, falling back progressively. */
 function pickThumbnail(thumbnails?: ThumbnailSet): string | undefined {
@@ -235,37 +236,66 @@ export function createYouTubeAdapter(
 			// Every channel's uploads live in a playlist whose id is the channel id
 			// with the `UC` prefix swapped for `UU` — a documented YouTube invariant,
 			// so we page it directly without spending a `channels.list` unit first.
+			// Keep paging until the hydrated uploads contain the requested number of
+			// Shorts or the playlist ends. Duration is only known after videos.list
+			// hydration, so long-form uploads are skipped after hydration rather than
+			// returned to the write path.
 			const uploadsPlaylistId = `UU${channelId.slice(2)}`;
-			const page = await get<PlaylistItemResource>("playlistItems", {
-				part: "contentDetails",
-				playlistId: uploadsPlaylistId,
-				maxResults: String(
-					Math.min(opts?.limit ?? MAX_IDS_PER_REQUEST, MAX_IDS_PER_REQUEST),
-				),
-			});
-			const videoIds = (page.items ?? [])
-				.map((item) => item.contentDetails?.videoId)
-				.filter((id): id is string => id !== undefined);
-			if (videoIds.length === 0) {
-				return [];
+			const shortTarget = opts?.limit ?? MAX_IDS_PER_REQUEST;
+			const uploads: ChannelUpload[] = [];
+			let shortCount = 0;
+			let pageToken: string | undefined;
+			while (shortCount < shortTarget) {
+				const params: Record<string, string> = {
+					part: "contentDetails",
+					playlistId: uploadsPlaylistId,
+					maxResults: String(MAX_IDS_PER_REQUEST),
+				};
+				if (pageToken !== undefined) {
+					params.pageToken = pageToken;
+				}
+				const page = await get<PlaylistItemResource>("playlistItems", params);
+				const videoIds = (page.items ?? [])
+					.map((item) => item.contentDetails?.videoId)
+					.filter((id): id is string => id !== undefined);
+				if (videoIds.length > 0) {
+					// One hydration batch pulls duration (→ Form), a fresh view count (→
+					// current reach + first Snapshot), and standardness for the whole page.
+					const items = await getByIds<VideoResource>(
+						"videos",
+						"snippet,contentDetails,statistics",
+						videoIds,
+					);
+					const hydrated = items.map((item) => ({
+						ytVideoId: item.id,
+						ytChannelId: item.snippet?.channelId ?? channelId,
+						title: item.snippet?.title ?? "",
+						thumbnailUrl: pickThumbnail(item.snippet?.thumbnails),
+						durationSec: parseIso8601Duration(
+							item.contentDetails?.duration ?? "",
+						),
+						publishedAt: Date.parse(item.snippet?.publishedAt ?? "") || 0,
+						viewCount: toViewCount(item.statistics?.viewCount),
+						isStandard:
+							(item.snippet?.liveBroadcastContent ?? "none") === "none",
+					}));
+					for (const upload of hydrated) {
+						if (upload.durationSec > SHORT_MAX_SEC) {
+							continue;
+						}
+						if (shortCount >= shortTarget) {
+							continue;
+						}
+						shortCount += 1;
+						uploads.push(upload);
+					}
+				}
+				pageToken = page.nextPageToken;
+				if (pageToken === undefined) {
+					break;
+				}
 			}
-			// One hydration batch pulls duration (→ Form), a fresh view count (→ first
-			// Snapshot), and standardness for the whole page (≤ 50 ids ⇒ 1 unit).
-			const items = await getByIds<VideoResource>(
-				"videos",
-				"snippet,contentDetails,statistics",
-				videoIds,
-			);
-			return items.map((item) => ({
-				ytVideoId: item.id,
-				ytChannelId: item.snippet?.channelId ?? channelId,
-				title: item.snippet?.title ?? "",
-				thumbnailUrl: pickThumbnail(item.snippet?.thumbnails),
-				durationSec: parseIso8601Duration(item.contentDetails?.duration ?? ""),
-				publishedAt: Date.parse(item.snippet?.publishedAt ?? "") || 0,
-				viewCount: toViewCount(item.statistics?.viewCount),
-				isStandard: (item.snippet?.liveBroadcastContent ?? "none") === "none",
-			}));
+			return uploads;
 		},
 	};
 }

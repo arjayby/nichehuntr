@@ -11,8 +11,8 @@ import type { ChannelUpload, YouTubeAdapter } from "./model/youtube";
 import { runSubmission } from "./submissions";
 
 const DAY = 24 * 60 * 60 * 1000;
-const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
-const SHORT_SEC = 30; // ≤ 180s ⇒ short-form; short Proven threshold is 500k.
+const LONG_SEC = 600; // > 300s ⇒ ignored by the short-form lifecycle.
+const SHORT_SEC = 30; // ≤ 300s ⇒ short-form for the lifecycle.
 
 /** A well-formed `UC…` id built from a readable stem (padded to 22 chars). */
 function ucId(stem: string): string {
@@ -49,11 +49,13 @@ function uploads(
  * `handleThrows`, so the handle-lookup branches are driven without network. */
 function stubAdapter(opts: {
 	title?: string;
+	subscriberCount?: number;
 	page: ChannelUpload[];
 	channelMissing?: boolean;
 	uploadsThrow?: boolean;
 	resolveHandleTo?: string | null;
 	handleThrows?: boolean;
+	uploadLimits?: (number | undefined)[];
 }): YouTubeAdapter {
 	return {
 		fetchChannels: async (ids) =>
@@ -63,13 +65,15 @@ function stubAdapter(opts: {
 						ytChannelId: id,
 						title: opts.title ?? `${id} title`,
 						handle: `@${id}`,
+						subscriberCount: opts.subscriberCount,
 					})),
 		fetchVideoStats: async (ids) =>
 			ids.map((id) => ({ ytVideoId: id, viewCount: 0 })),
-		fetchChannelUploads: async (channelId) => {
+		fetchChannelUploads: async (channelId, fetchOpts) => {
 			if (opts.uploadsThrow) {
 				throw new Error("YouTube API error");
 			}
+			opts.uploadLimits?.push(fetchOpts?.limit);
 			return opts.page.map((u) => ({ ...u, ytChannelId: channelId }));
 		},
 		resolveHandle: async () => {
@@ -147,7 +151,194 @@ async function submissionRow(
 	return rows.find((r) => r._id === submissionId);
 }
 
+async function feedTitlesByStage(
+	operator: Awaited<ReturnType<typeof setup>>["operator"],
+) {
+	const groups = await operator.query(api.feed.feed, {});
+	return Object.fromEntries(
+		groups.map((group) => [
+			group.stage,
+			group.cards.map((card) => card.channel.title),
+		]),
+	) as Record<"emerging" | "breaking_out" | "established", string[]>;
+}
+
 describe("runSubmission — the ingest spine", () => {
+	it("tracks a visible short-form channel and stores current stats for lifecycle reads", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("visible");
+		const uploadLimits: (number | undefined)[] = [];
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Visible Shorts",
+				subscriberCount: 12_000,
+				uploadLimits,
+				page: [
+					...uploads(id, {
+						count: 3,
+						viewCount: 120_000,
+						ageDays: 1,
+						durationSec: SHORT_SEC,
+						tag: "short",
+					}),
+					...uploads(id, {
+						count: 2,
+						viewCount: 1_000_000,
+						ageDays: 1,
+						durationSec: LONG_SEC,
+						tag: "long",
+					}),
+				],
+			}),
+		);
+
+		expect(uploadLimits).toEqual([50]);
+		expect(await submissionRow(admin, submissionId)).toMatchObject({
+			status: "tracked",
+			resolvedYtChannelId: id,
+		});
+
+		const titles = await feedTitlesByStage(operator);
+		expect(titles.breaking_out).toContain("Visible Shorts");
+
+		const stored = await t.run(async (ctx) => {
+			const channel = await ctx.db
+				.query("channels")
+				.withIndex("by_ytId", (q) => q.eq("ytId", id))
+				.unique();
+			const videos =
+				channel === null
+					? []
+					: await ctx.db
+							.query("videos")
+							.withIndex("by_channel_and_publishedAt", (q) =>
+								q.eq("channelId", channel._id),
+							)
+							.collect();
+			return {
+				subscriberCount: channel?.subscriberCount,
+				currentViewCounts: videos
+					.filter((video) => video.durationSec <= 300)
+					.map((video) => video.currentViewCount)
+					.sort((a, b) => (a ?? 0) - (b ?? 0)),
+			};
+		});
+		expect(stored).toEqual({
+			subscriberCount: 12_000,
+			currentViewCounts: [120_000, 120_000, 120_000],
+		});
+	});
+
+	it("keeps a successfully ingested hidden channel tracked rather than failed", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("hidden");
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Hidden Tracked",
+				page: [
+					...uploads(id, {
+						count: 2,
+						viewCount: 1_000_000,
+						ageDays: 1,
+						durationSec: SHORT_SEC,
+						tag: "short",
+					}),
+					...uploads(id, {
+						count: 20,
+						viewCount: 1_000_000,
+						ageDays: 1,
+						durationSec: LONG_SEC,
+						tag: "long",
+					}),
+				],
+			}),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row).toMatchObject({ status: "tracked" });
+		expect(row?.failureReason).toBeNull();
+		expect(
+			Object.values(await feedTitlesByStage(operator)).flat(),
+		).not.toContain("Hidden Tracked");
+	});
+
+	it("tracks a mature stale channel as Established from 50 fetched Shorts and subscribers", async () => {
+		const { admin, operator, t } = await setup();
+		const id = ucId("mature");
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Mature Shorts",
+				subscriberCount: 60_000,
+				page: uploads(id, {
+					count: 50,
+					viewCount: 150_000,
+					ageDays: 45,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+
+		expect(await submissionRow(admin, submissionId)).toMatchObject({
+			status: "tracked",
+		});
+		const titles = await feedTitlesByStage(operator);
+		expect(titles.established).toContain("Mature Shorts");
+	});
+
+	it("re-submitting a tracked channel refreshes current stats in place and can hide it from the Feed", async () => {
+		const { t, operator } = await setup();
+		const id = ucId("refresh");
+		const strong = uploads(id, {
+			count: 3,
+			viewCount: 130_000,
+			ageDays: 1,
+			durationSec: SHORT_SEC,
+		});
+
+		await runOver(
+			t,
+			id,
+			stubAdapter({ title: "Refreshable Shorts", page: strong }),
+		);
+		expect((await feedTitlesByStage(operator)).breaking_out).toContain(
+			"Refreshable Shorts",
+		);
+
+		await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Refreshable Shorts",
+				page: strong.map((video) => ({ ...video, viewCount: 1_000 })),
+			}),
+		);
+
+		const counts = await t.run(async (ctx) => ({
+			channels: (await ctx.db.query("channels").collect()).length,
+			videos: (await ctx.db.query("videos").collect()).length,
+			currentViewCounts: (await ctx.db.query("videos").collect()).map(
+				(video) => video.currentViewCount,
+			),
+		}));
+		expect(counts).toEqual({
+			channels: 1,
+			videos: 3,
+			currentViewCounts: [1_000, 1_000, 1_000],
+		});
+		expect(
+			Object.values(await feedTitlesByStage(operator)).flat(),
+		).not.toContain("Refreshable Shorts");
+	});
+
 	it("tracks a proven channel and derives its Listing", async () => {
 		const { t, admin } = await setup();
 		const id = ucId("proven");

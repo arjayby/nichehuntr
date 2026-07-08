@@ -65,6 +65,13 @@ async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
 
 	return Promise.all(
 		videos.map(async (video: Doc<"videos">) => {
+			if (video.currentViewCount !== undefined) {
+				return {
+					durationSec: video.durationSec,
+					publishedAt: video.publishedAt,
+					viewCount: video.currentViewCount,
+				};
+			}
 			const latestSnapshot = await ctx.db
 				.query("videoSnapshots")
 				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))

@@ -120,7 +120,7 @@ export type WatchlistDetail = {
 };
 
 /** One row of the detail pane's recent-uploads strip. `viewCount` is the
- * video's latest Snapshot reading (ADR-0001), or null before its first one —
+ * video's latest observed current count, or null before its first reading —
  * unmeasured, never zero. */
 export type WatchlistUpload = {
 	videoId: Id<"videos">;
@@ -187,6 +187,16 @@ async function recentUploads(
 	// The snapshot lookups are independent — resolve them as one parallel batch.
 	return Promise.all(
 		matching.map(async (video) => {
+			if (video.currentViewCount !== undefined) {
+				return {
+					videoId: video._id,
+					ytId: video.ytId,
+					title: video.title,
+					thumbnailUrl: video.thumbnailUrl ?? null,
+					publishedAt: video.publishedAt,
+					viewCount: video.currentViewCount,
+				};
+			}
 			const latestSnapshot = await ctx.db
 				.query("videoSnapshots")
 				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))

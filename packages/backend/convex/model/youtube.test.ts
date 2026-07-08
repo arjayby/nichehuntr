@@ -155,7 +155,7 @@ function uploadsFetch(urls: string[], videoCount: number): typeof fetch {
 				liveBroadcastContent: id === "vid1" ? "live" : "none",
 				thumbnails: { high: { url: `https://img/${id}.jpg` } },
 			},
-			contentDetails: { duration: "PT10M" },
+			contentDetails: { duration: "PT45S" },
 			statistics: { viewCount: "4200" },
 		}));
 		return jsonResponse({ items });
@@ -196,7 +196,7 @@ describe("fetchChannelUploads", () => {
 			ytChannelId: "UCchannel",
 			title: "Title vid0",
 			thumbnailUrl: "https://img/vid0.jpg",
-			durationSec: 600,
+			durationSec: 45,
 			publishedAt: Date.parse("2026-01-02T03:04:05Z"),
 			viewCount: 4200,
 			isStandard: true,
@@ -212,6 +212,59 @@ describe("fetchChannelUploads", () => {
 		// vid1 is flagged `liveBroadcastContent: "live"` in the fake.
 		expect(uploads.find((u) => u.ytVideoId === "vid1")?.isStandard).toBe(false);
 		expect(uploads.find((u) => u.ytVideoId === "vid0")?.isStandard).toBe(true);
+	});
+
+	it("pages past long uploads and returns only up to the requested Shorts", async () => {
+		const urls: string[] = [];
+		const pagedFetch = (async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			urls.push(url);
+			const parsed = new URL(url);
+			if (parsed.pathname.endsWith("/playlistItems")) {
+				const pageToken = parsed.searchParams.get("pageToken");
+				const prefix = pageToken === "second" ? "short" : "long";
+				const items = Array.from({ length: 50 }, (_, i) => ({
+					contentDetails: { videoId: `${prefix}${i}` },
+				}));
+				return jsonResponse(
+					pageToken === "second"
+						? { items }
+						: { items, nextPageToken: "second" },
+				);
+			}
+			const ids = parsed.searchParams.get("id")?.split(",") ?? [];
+			return jsonResponse({
+				items: ids.map((id) => ({
+					id,
+					snippet: {
+						title: `Title ${id}`,
+						channelId: "UCchannel",
+						publishedAt: "2026-01-02T03:04:05Z",
+						liveBroadcastContent: "none",
+					},
+					contentDetails: {
+						duration: id.startsWith("short") ? "PT45S" : "PT10M",
+					},
+					statistics: { viewCount: "4200" },
+				})),
+			});
+		}) as typeof fetch;
+		const adapter = createYouTubeAdapter("KEY", pagedFetch);
+
+		const uploads = await adapter.fetchChannelUploads("UCchannel", {
+			limit: 50,
+		});
+
+		expect(
+			urls.filter((u) => new URL(u).pathname.endsWith("/playlistItems")),
+		).toHaveLength(2);
+		expect(
+			urls.filter((u) => new URL(u).pathname.endsWith("/videos")),
+		).toHaveLength(2);
+		expect(uploads).toHaveLength(50);
+		expect(uploads.filter((upload) => upload.durationSec <= 300)).toHaveLength(
+			50,
+		);
 	});
 
 	it("returns nothing (and skips hydration) for a channel with no uploads", async () => {

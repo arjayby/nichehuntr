@@ -141,6 +141,7 @@ export const seed = internalMutation({
 					durationSec: video.durationSec,
 					form: classifyForm(video.durationSec),
 					publishedAt: now - video.ageDays * DAY_MS,
+					currentViewCount: video.viewCount,
 					isStandard: video.isStandard ?? true,
 				});
 				await ctx.db.insert("videoSnapshots", {

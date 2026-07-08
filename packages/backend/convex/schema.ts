@@ -54,6 +54,10 @@ export default defineSchema({
 		durationSec: v.number(),
 		form: formValidator,
 		publishedAt: v.number(),
+		// Latest raw view count observed for this video. The short-form lifecycle
+		// reads current reach directly; snapshots remain only as historical samples
+		// for legacy Listing/momentum paths and old rows may not have this yet.
+		currentViewCount: v.optional(v.number()),
 		isStandard: v.boolean(),
 	})
 		.index("by_channel_and_publishedAt", ["channelId", "publishedAt"])
