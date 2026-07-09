@@ -5,7 +5,7 @@
  * reaches for Node built-ins (fs/path, for optional credential files), so it can't
  * run in Convex's default V8 runtime — this file carries the `"use node"`
  * directive and therefore holds *only* the action. The DB seam
- * (`listListingsToEnrich`, `applyEnrichment`) and the `runEnrich` orchestration
+ * (`listChannelsToEnrich`, `applyEnrichment`) and the `runEnrich` orchestration
  * stay in `enrich.ts` on the default runtime; this action just builds the live
  * adapter and hands it to that same, test-covered orchestration.
  */

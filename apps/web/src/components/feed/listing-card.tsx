@@ -138,9 +138,9 @@ export function SaturationRead({ saturation }: { saturation: number | null }) {
 }
 
 /**
- * Clonability score: the tunable weighted mean of this form's signals (CONTEXT.md).
+ * Clonability score: the tunable weighted mean of the Channel's signals (CONTEXT.md).
  * It's the within-column sort key, so it reads as the card's headline number. A
- * dash until the enrich cron scores the Listing — Clonability never gates (ADR-0003).
+ * dash until the enrich cron scores the Channel — Clonability never gates (ADR-0003).
  */
 export function ClonabilityRead({
 	clonability,
@@ -155,7 +155,7 @@ export function ClonabilityRead({
 				title={
 					clonability === null
 						? "Clonability pending"
-						: "Weighted mean of this form's signals"
+						: "Weighted mean of this Channel's signals"
 				}
 			>
 				{clonability ?? "—"}
@@ -168,10 +168,10 @@ export function ClonabilityRead({
  * The top signals behind the Clonability score, as label + score only — the
  * card stays scannable at the Feed's pace. The full one-line rationales the
  * Enrichment pass gave live in the channel-detail modal. Renders nothing until
- * the Listing is enriched.
+ * the Channel is enriched.
  */
 function SignalScores({ card }: { card: FeedCard }) {
-	const tops = topSignals(card.signals, "short", 2);
+	const tops = topSignals(card.signals, 2);
 	if (tops.length === 0) {
 		return null;
 	}

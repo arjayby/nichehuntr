@@ -90,19 +90,18 @@ export default defineSchema({
 		.index("by_channel", ["channelId"])
 		.index("by_form_and_proven", ["form", "proven"]),
 
-	// The Enrichment cache: one row per (channel, form) holding the multimodal
-	// Claude pass's per-signal scores (ADR-0003, Slice 5). Kept off the `listings`
-	// table because a recompute deletes and reinserts Listings, whereas enrichment
-	// is expensive and must persist and be reused across recomputes. `fingerprint`
-	// is a digest of the inputs the scores were derived from, so the enrich cron
-	// re-runs a Listing only when its metadata/thumbnails materially change.
+	// The Enrichment cache: one row per Channel holding the multimodal Claude
+	// pass's short-form signal scores (ADR-0003, ADR-0006). Kept off any derived
+	// read model because enrichment is expensive and must persist independently of
+	// lifecycle recomputes. `fingerprint` digests the inputs the scores came from,
+	// so the enrich cron re-runs a Channel only when its short-form metadata inputs
+	// materially change.
 	enrichments: defineTable({
 		channelId: v.id("channels"),
-		form: formValidator,
 		signals: signalsValidator,
 		fingerprint: v.string(),
 		enrichedAt: v.number(),
-	}).index("by_channel_and_form", ["channelId", "form"]),
+	}).index("by_channel", ["channelId"]),
 
 	// The Operator's private Watchlist: one row per (Operator, Channel) pair
 	// (CONTEXT.md). Never a listing id and never copied channel data — entries

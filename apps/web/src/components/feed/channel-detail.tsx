@@ -1,7 +1,7 @@
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
 import {
-	SIGNAL_SETS,
+	CHANNEL_SIGNAL_NAMES,
 	topSignals,
 } from "@nichehuntr/backend/convex/model/clonability";
 import type {
@@ -124,8 +124,8 @@ function SignalBreakdown({
 }: {
 	feed: NonNullable<WatchlistDetail["feed"]>;
 }) {
-	// All of the short-form scored signals, not the card's top-two teaser.
-	const signals = topSignals(feed.signals, "short", SIGNAL_SETS.short.length);
+	// All of the scored signals, not the card's top-two teaser.
+	const signals = topSignals(feed.signals, CHANNEL_SIGNAL_NAMES.length);
 	if (signals.length === 0) {
 		return (
 			<p className="text-muted-foreground text-xs">Signals not scored yet.</p>

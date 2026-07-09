@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+
 import { setup } from "../test/harness";
+import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { runEnrich } from "./enrich";
@@ -8,58 +10,88 @@ import type {
 	EnrichmentInput,
 	Signals,
 } from "./model/clonability";
-import type { Form } from "./model/deriveListings";
 import { recomputeListingsForChannel } from "./model/listings";
 
 const DAY = 24 * 60 * 60 * 1000;
-const LONG_SEC = 600; // > 180s ⇒ long-form; long Proven threshold is 100k.
+const SHORT_SEC = 45;
+const LONG_SEC = 600;
 
-/**
- * Insert a proven, strongly-accelerating long-form channel (three uploads rising
- * 100k→150k over 2 days on a 150k baseline) and derive its Listing. On momentum
- * alone it is Breaking Out — the clean baseline for showing enrichment adds a
- * Clonability score without touching the Proven gate or the Stage.
- */
-async function addStrongChannel(
+async function addChannel(
 	ctx: MutationCtx,
-	opts: { ytId: string; title: string; description?: string },
+	opts: {
+		ytId: string;
+		title: string;
+		description?: string;
+		shortViews?: number[];
+		longViews?: number[];
+	},
 ): Promise<Id<"channels">> {
 	const now = Date.now();
 	const channelId = await ctx.db.insert("channels", {
 		ytId: opts.ytId,
 		title: opts.title,
 		description: opts.description,
+		subscriberCount: 1_000,
 		discoveredAt: now,
-		source: "trending",
+		source: "admin",
 	});
-	for (let i = 0; i < 3; i++) {
-		const videoId = await ctx.db.insert("videos", {
-			ytId: `${opts.ytId}_v${i}`,
+
+	for (const [index, viewCount] of (
+		opts.shortViews ?? [120_000, 130_000, 10_000]
+	).entries()) {
+		await addVideo(ctx, {
 			channelId,
-			title: `${opts.title} upload ${i}`,
-			thumbnailUrl: `https://img.example/${opts.ytId}_${i}.jpg`,
-			durationSec: LONG_SEC,
-			form: "long",
-			publishedAt: now - 30 * DAY,
-			isStandard: true,
-		});
-		await ctx.db.insert("videoSnapshots", {
-			videoId,
-			viewCount: 100_000,
-			at: now - 2 * DAY,
-		});
-		await ctx.db.insert("videoSnapshots", {
-			videoId,
-			viewCount: 150_000,
-			at: now,
+			ytId: `${opts.ytId}_short_${index}`,
+			title: `${opts.title} short ${index}`,
+			durationSec: SHORT_SEC,
+			viewCount,
+			publishedAt: now - (index + 1) * DAY,
 		});
 	}
+	for (const [index, viewCount] of (opts.longViews ?? []).entries()) {
+		await addVideo(ctx, {
+			channelId,
+			ytId: `${opts.ytId}_long_${index}`,
+			title: `${opts.title} long ${index}`,
+			durationSec: LONG_SEC,
+			viewCount,
+			publishedAt: now - index * DAY,
+		});
+	}
+
 	await recomputeListingsForChannel(ctx, channelId);
 	return channelId;
 }
 
-/** A stub enrichment adapter that records its calls, so no network is hit and the
- * cron's caching (call-count) can be asserted — mirroring `stubEmbeddings`. */
+async function addVideo(
+	ctx: MutationCtx,
+	opts: {
+		channelId: Id<"channels">;
+		ytId: string;
+		title: string;
+		durationSec: number;
+		viewCount: number;
+		publishedAt: number;
+	},
+) {
+	const videoId = await ctx.db.insert("videos", {
+		ytId: opts.ytId,
+		channelId: opts.channelId,
+		title: opts.title,
+		thumbnailUrl: `https://img.example/${opts.ytId}.jpg`,
+		durationSec: opts.durationSec,
+		form: opts.durationSec <= 300 ? "short" : "long",
+		publishedAt: opts.publishedAt,
+		currentViewCount: opts.viewCount,
+		isStandard: true,
+	});
+	await ctx.db.insert("videoSnapshots", {
+		videoId,
+		viewCount: opts.viewCount,
+		at: Date.now(),
+	});
+}
+
 function stubEnrichment(signalsFor: (input: EnrichmentInput) => Signals) {
 	const calls: EnrichmentInput[] = [];
 	const adapter: EnrichmentAdapter = {
@@ -71,164 +103,201 @@ function stubEnrichment(signalsFor: (input: EnrichmentInput) => Signals) {
 	return { adapter, calls };
 }
 
-/** Long-form signals whose even weighting makes Clonability the plain mean. */
-const longSignals = (enterprise: number, improvable: number): Signals => ({
-	enterprise_value: { score: enterprise, rationale: "high-CPM niche" },
-	improvable: { score: improvable, rationale: "thumbnails are weak" },
+const shortSignals = (
+	automatable: number,
+	transformative: number,
+	improvable: number,
+): Signals => ({
+	automatable: { score: automatable, rationale: "repeatable template" },
+	transformative: { score: transformative, rationale: "repackages clips" },
+	improvable: { score: improvable, rationale: "weak execution" },
 });
 
-async function listingByTitle(
+async function enrichmentForChannel(
 	t: Awaited<ReturnType<typeof setup>>["t"],
-	title: string,
-	form: Form = "long",
+	channelId: Id<"channels">,
 ) {
 	return t.run(async (ctx) => {
-		const channels = await ctx.db.query("channels").collect();
-		const channel = channels.find((row) => row.title === title);
-		if (channel === undefined) {
-			return null;
-		}
-		const listings = await ctx.db
-			.query("listings")
-			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
+		const rows = await ctx.db
+			.query("enrichments")
+			.withIndex("by_channel", (q) => q.eq("channelId", channelId))
 			.collect();
-		return listings.find((row) => row.form === form) ?? null;
+		return rows[0] ?? null;
 	});
 }
 
-describe("runEnrich — Clonability scoring", () => {
-	it("rides a Clonability score and rationales onto the Listing", async () => {
-		const { t } = await setup();
-		await t.run((ctx) =>
-			addStrongChannel(ctx, { ytId: "fin", title: "Deep Finance" }),
+describe("runEnrich — channel-level short-form scoring", () => {
+	it("writes one channel-level enrichment row and exposes clonability on the Feed", async () => {
+		const { t, operator } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, {
+				ytId: "shorts",
+				title: "AI Shorts",
+				description: "Daily AI shorts.",
+			}),
 		);
 
-		// Proven and Breaking Out, but no Clonability yet (graceful degradation).
-		const before = await listingByTitle(t, "Deep Finance");
-		expect(before?.clonability).toBeNull();
-		expect(before?.signals).toBeNull();
-		expect(before?.stage).toBe("breaking_out");
+		const before = await operator.query(api.feed.feed, {});
+		expect(before.flatMap((g) => g.cards)[0]).toMatchObject({
+			channelId,
+			clonability: null,
+			signals: null,
+		});
 
-		const { adapter } = stubEnrichment(() => longSignals(80, 40));
+		const { adapter } = stubEnrichment(() => shortSignals(90, 50, 50));
 		const result = await t.action((ctx) => runEnrich(ctx, adapter));
 		expect(result).toEqual({ enriched: 1, failed: 0 });
 
-		const after = await listingByTitle(t, "Deep Finance");
-		expect(after?.clonability).toBe(60); // (80 + 40) / 2
-		expect(after?.signals?.enterprise_value?.rationale).toBe("high-CPM niche");
-		// Enrichment never gates and never moves Stage (ADR-0003).
-		expect(after?.stage).toBe("breaking_out");
+		const row = await enrichmentForChannel(t, channelId);
+		expect(row).toMatchObject({
+			channelId,
+			signals: {
+				automatable: { score: 90, rationale: "repeatable template" },
+				transformative: { score: 50, rationale: "repackages clips" },
+				improvable: { score: 50, rationale: "weak execution" },
+			},
+		});
+		expect(row).not.toHaveProperty("form");
+
+		const after = await operator.query(api.feed.feed, {});
+		expect(after.flatMap((g) => g.cards)[0]).toMatchObject({
+			channelId,
+			stage: "breaking_out",
+			clonability: 70,
+			signals: row?.signals,
+		});
 	});
 
-	it("keeps a proven Listing visible to downstream reads before enrichment", async () => {
+	it("builds enrichment input from short-form videos and ignores long-form uploads", async () => {
 		const { t } = await setup();
 		await t.run((ctx) =>
-			addStrongChannel(ctx, { ytId: "raw", title: "Unenriched" }),
+			addChannel(ctx, {
+				ytId: "mixed",
+				title: "Mixed Channel",
+				longViews: [1_000_000, 900_000],
+			}),
 		);
 
-		const listing = await listingByTitle(t, "Unenriched");
-		expect(listing?.proven).toBe(true);
-		expect(listing?.clonability).toBeNull();
-		expect(listing?.signals).toBeNull();
-	});
-
-	it("passes the channel's thumbnails to the adapter", async () => {
-		const { t } = await setup();
-		await t.run((ctx) =>
-			addStrongChannel(ctx, { ytId: "th", title: "Thumbs" }),
-		);
-
-		const { adapter, calls } = stubEnrichment(() => longSignals(50, 50));
+		const { adapter, calls } = stubEnrichment(() => shortSignals(50, 50, 50));
 		await t.action((ctx) => runEnrich(ctx, adapter));
 
 		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			channelTitle: "Mixed Channel",
+			videos: [
+				{ ytId: "mixed_short_0", title: "Mixed Channel short 0" },
+				{ ytId: "mixed_short_1", title: "Mixed Channel short 1" },
+				{ ytId: "mixed_short_2", title: "Mixed Channel short 2" },
+			],
+		});
+		expect(calls[0]?.videos.map((video) => video.ytId)).not.toContain(
+			"mixed_long_0",
+		);
+		expect(calls[0]).not.toHaveProperty("form");
 		expect(calls[0]?.videos.every((v) => Boolean(v.thumbnailUrl))).toBe(true);
 	});
-});
 
-describe("runEnrich — caching & material change", () => {
-	it("caches results and re-runs only when inputs materially change", async () => {
+	it("caches by channel and re-runs only when short-form inputs materially change", async () => {
 		const { t } = await setup();
 		const channelId = await t.run((ctx) =>
-			addStrongChannel(ctx, { ytId: "cache", title: "Cache Me" }),
+			addChannel(ctx, {
+				ytId: "cache",
+				title: "Cache Me",
+				longViews: [1_000_000],
+			}),
 		);
-		const { adapter, calls } = stubEnrichment(() => longSignals(70, 50));
+		const { adapter, calls } = stubEnrichment(() => shortSignals(70, 50, 50));
 
-		const first = await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(first.enriched).toBe(1);
+		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
 		expect(calls).toHaveLength(1);
 
-		// Nothing changed ⇒ the fingerprint matches ⇒ no re-run, no extra call.
-		const second = await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(second.enriched).toBe(0);
+		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(0);
 		expect(calls).toHaveLength(1);
 
-		// Edit an upload title ⇒ material change ⇒ re-enriched.
 		await t.run(async (ctx) => {
-			const video = await ctx.db
+			const long = await ctx.db
 				.query("videos")
-				.withIndex("by_ytId", (q) => q.eq("ytId", "cache_v0"))
+				.withIndex("by_ytId", (q) => q.eq("ytId", "cache_long_0"))
 				.unique();
-			if (video !== null) {
-				await ctx.db.patch("videos", video._id, {
-					title: "Cache Me — retitled",
-				});
+			if (long !== null) {
+				await ctx.db.patch(long._id, { title: "Long retitle ignored" });
 			}
 			await recomputeListingsForChannel(ctx, channelId);
 		});
+		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(0);
+		expect(calls).toHaveLength(1);
 
-		const third = await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(third.enriched).toBe(1);
+		await t.run(async (ctx) => {
+			const short = await ctx.db
+				.query("videos")
+				.withIndex("by_ytId", (q) => q.eq("ytId", "cache_short_0"))
+				.unique();
+			if (short !== null) {
+				await ctx.db.patch(short._id, { title: "Cache Me retitled" });
+			}
+			await recomputeListingsForChannel(ctx, channelId);
+		});
+		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
 		expect(calls).toHaveLength(2);
 	});
 
-	it("preserves Clonability across a later recompute (survives the clobber)", async () => {
+	it("collapses duplicate channel enrichment rows when refreshing stale signals", async () => {
 		const { t } = await setup();
+		const channelId = await t.run(async (ctx) => {
+			const id = await addChannel(ctx, { ytId: "dupe", title: "Deduped" });
+			await ctx.db.insert("enrichments", {
+				channelId: id,
+				fingerprint: "stale-1",
+				enrichedAt: Date.now() - 10,
+				signals: {
+					improvable: { score: 10, rationale: "legacy partial row" },
+				},
+			});
+			await ctx.db.insert("enrichments", {
+				channelId: id,
+				fingerprint: "stale-2",
+				enrichedAt: Date.now() - 5,
+				signals: {
+					automatable: { score: 20, rationale: "legacy duplicate row" },
+					transformative: { score: 20, rationale: "legacy duplicate row" },
+					improvable: { score: 20, rationale: "legacy duplicate row" },
+				},
+			});
+			return id;
+		});
+
+		const { adapter } = stubEnrichment(() => shortSignals(80, 60, 40));
+		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
+
+		const rows = await t.run((ctx) =>
+			ctx.db
+				.query("enrichments")
+				.withIndex("by_channel", (q) => q.eq("channelId", channelId))
+				.collect(),
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.signals.automatable?.score).toBe(80);
+	});
+
+	it("reuses channel enrichment across lifecycle/listing recomputes", async () => {
+		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) =>
-			addStrongChannel(ctx, { ytId: "keep", title: "Keep Me" }),
+			addChannel(ctx, { ytId: "keep", title: "Keep Me" }),
 		);
 
-		const { adapter } = stubEnrichment(() => longSignals(90, 30));
+		const { adapter } = stubEnrichment(() => shortSignals(90, 30, 30));
 		await t.action((ctx) => runEnrich(ctx, adapter));
-		expect((await listingByTitle(t, "Keep Me"))?.clonability).toBe(60);
+		expect(
+			(await operator.query(api.feed.feed, {})).flatMap((g) => g.cards)[0]
+				?.clonability,
+		).toBe(60);
 
-		// A later pipeline tick deletes and re-inserts this channel's Listings.
 		await t.run((ctx) => recomputeListingsForChannel(ctx, channelId));
 
-		const listing = await listingByTitle(t, "Keep Me");
-		expect(listing?.clonability).toBe(60); // re-applied from the cache, not lost
-		expect(listing?.signals?.enterprise_value?.score).toBe(90);
-	});
-});
-
-describe("runEnrich — within-column ranking", () => {
-	it("sorts a Stage column by Clonability so the strongest clone target leads", async () => {
-		const { t } = await setup();
-		await t.run(async (ctx) => {
-			await addStrongChannel(ctx, { ytId: "lo", title: "Low Clone" });
-			await addStrongChannel(ctx, { ytId: "hi", title: "High Clone" });
-		});
-
-		const { adapter } = stubEnrichment((input) =>
-			input.channelTitle.startsWith("High")
-				? longSignals(90, 90)
-				: longSignals(20, 20),
-		);
-		await t.action((ctx) => runEnrich(ctx, adapter));
-
-		const listings = await t.run(async (ctx) => {
-			const channels = await ctx.db.query("channels").collect();
-			const names = new Map(channels.map((c) => [c._id, c.title]));
-			return (await ctx.db.query("listings").collect())
-				.filter((listing) => listing.stage === "breaking_out")
-				.sort((a, b) => (b.clonability ?? -1) - (a.clonability ?? -1))
-				.map((listing) => names.get(listing.channelId));
-		});
-		const titles = listings.filter(
-			(title): title is string => title !== undefined,
-		);
-		expect(titles.indexOf("High Clone")).toBeLessThan(
-			titles.indexOf("Low Clone"),
-		);
+		const card = (await operator.query(api.feed.feed, {}))
+			.flatMap((g) => g.cards)
+			.find((item) => item.channelId === channelId);
+		expect(card?.clonability).toBe(60);
+		expect(card?.signals?.automatable.score).toBe(90);
 	});
 });

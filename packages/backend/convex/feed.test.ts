@@ -81,7 +81,6 @@ async function addEnrichment(
 ) {
 	await ctx.db.insert("enrichments", {
 		channelId,
-		form: "short",
 		fingerprint: `fp_${channelId}`,
 		enrichedAt: Date.now(),
 		signals: {
@@ -280,6 +279,98 @@ describe("feed query", () => {
 		]);
 		expect(emerging.map((c) => c.clonability)).toEqual([90, 50, 20, null]);
 		expect(emerging[0]?.signals?.automatable.rationale).toBe("templated");
+	});
+
+	it("does not let missing or low clonability gate Feed visibility or stage", async () => {
+		const { t, operator } = await setup();
+		await t.run(async (ctx) => {
+			const missing = await addChannel(ctx, "Missing Enrichment");
+			await addShorts(ctx, missing, [120_000, 130_000, 10_000]);
+
+			const low = await addChannel(ctx, "Low Clonability");
+			await addShorts(ctx, low, [120_000, 130_000, 10_000]);
+			await addEnrichment(ctx, low, {
+				automatable: 0,
+				transformative: 0,
+				improvable: 0,
+			});
+		});
+
+		const breakingOut = cardsForStage(
+			await operator.query(api.feed.feed, {}),
+			"breaking_out",
+		);
+
+		expect(breakingOut.map((card) => card.channel.title)).toEqual([
+			"Low Clonability",
+			"Missing Enrichment",
+		]);
+		expect(breakingOut.map((card) => card.clonability)).toEqual([0, null]);
+		expect(breakingOut.every((card) => card.stage === "breaking_out")).toBe(
+			true,
+		);
+	});
+
+	it("reads the preferred channel enrichment row when duplicate cache rows exist", async () => {
+		const { t, operator } = await setup();
+		await t.run(async (ctx) => {
+			const channelId = await addChannel(ctx, "Duplicate Cache");
+			await addShorts(ctx, channelId, [80_000, 60_000, 10_000]);
+			await ctx.db.insert("enrichments", {
+				channelId,
+				fingerprint: "partial",
+				enrichedAt: Date.now() + 1_000,
+				signals: {
+					improvable: { score: 10, rationale: "partial duplicate" },
+				},
+			});
+			await addEnrichment(ctx, channelId, {
+				automatable: 90,
+				transformative: 70,
+				improvable: 50,
+			});
+		});
+
+		const [card] = cardsForStage(
+			await operator.query(api.feed.feed, {}),
+			"emerging",
+		);
+
+		expect(card).toMatchObject({
+			channel: { title: "Duplicate Cache" },
+			clonability: 75,
+			signals: {
+				automatable: { score: 90, rationale: "templated" },
+			},
+		});
+	});
+
+	it("ignores legacy long-form enrichment rows when reading Channel clonability", async () => {
+		const { t, operator } = await setup();
+		await t.run(async (ctx) => {
+			const channelId = await addChannel(ctx, "Legacy Long Row");
+			await addShorts(ctx, channelId, [80_000, 60_000, 10_000]);
+			await ctx.db.insert("enrichments", {
+				channelId,
+				fingerprint: "legacy-long",
+				enrichedAt: Date.now(),
+				signals: {
+					enterprise_value: { score: 100, rationale: "old long-form signal" },
+					improvable: { score: 100, rationale: "shared long-form signal" },
+				},
+			});
+		});
+
+		const [card] = cardsForStage(
+			await operator.query(api.feed.feed, {}),
+			"emerging",
+		);
+
+		expect(card).toMatchObject({
+			channel: { title: "Legacy Long Row" },
+			clonability: null,
+			signals: null,
+		});
 	});
 
 	it("narrows to only the requested lifecycle stages", async () => {
