@@ -64,7 +64,6 @@ describe("purgePipeline", () => {
 			});
 			await ctx.db.insert("enrichments", {
 				channelId,
-				form: "long",
 				signals: {},
 				fingerprint: "fp",
 				enrichedAt: Date.now(),

@@ -7,6 +7,7 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { channelEnrichmentFor } from "./model/channelEnrichment";
 import {
 	type ChannelLifecycleStage,
 	deriveChannelLifecycle,
@@ -173,15 +174,6 @@ async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
 	);
 }
 
-async function shortEnrichmentFor(ctx: QueryCtx, channelId: Id<"channels">) {
-	return ctx.db
-		.query("enrichments")
-		.withIndex("by_channel_and_form", (q) =>
-			q.eq("channelId", channelId).eq("form", "short"),
-		)
-		.unique();
-}
-
 /**
  * The Channel's current Feed state, or null when it is Tracked/hidden. Null is a
  * product state — "no longer on the Feed" — not an error.
@@ -192,7 +184,7 @@ async function liveFeedStateFor(
 ): Promise<WatchlistDetail["feed"]> {
 	const [videos, enrichment] = await Promise.all([
 		videosForLifecycle(ctx, channel._id),
-		shortEnrichmentFor(ctx, channel._id),
+		channelEnrichmentFor(ctx, channel._id),
 	]);
 	const lifecycle = deriveChannelLifecycle({
 		subscriberCount: channel.subscriberCount ?? 0,
@@ -205,7 +197,7 @@ async function liveFeedStateFor(
 	return {
 		stage: lifecycle.stage,
 		evidence: lifecycle.evidence,
-		clonability: computeClonability(enrichment?.signals ?? null, "short"),
+		clonability: computeClonability(enrichment?.signals ?? null),
 		signals: enrichment?.signals ?? null,
 	};
 }

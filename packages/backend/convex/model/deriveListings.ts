@@ -14,7 +14,7 @@
  * in, Listing(s) out) makes it the project's primary test seam.
  */
 
-import { computeClonability, type Signals } from "./clonability";
+import type { Signals } from "./clonability";
 
 /** A content form. A video/listing is either short-form or long-form. */
 export type Form = "short" | "long";
@@ -139,13 +139,6 @@ export type DeriveListingsInput<Cid> = {
 	 * on the momentum axis.
 	 */
 	saturation?: number | null;
-	/**
-	 * Per-form Enrichment signals, from the enrich cron's cache (ADR-0003). Unlike
-	 * Saturation these are per-(channel, form) — the signal set and the thumbnails
-	 * differ by form — so they're keyed by form and ridden onto the matching
-	 * Listing. Absent/`null` for a form leaves its Clonability unmeasured.
-	 */
-	enrichmentByForm?: Partial<Record<Form, Signals | null>>;
 };
 
 /** The reactive read-model row produced per (channel, form). */
@@ -272,11 +265,6 @@ export function deriveListings<Cid>(
 		// Saturation is per-channel (the embedding is per-channel), so both forms
 		// share it; it dominates Stage once the niche is crowded.
 		const saturation = input.saturation ?? null;
-		// Enrichment signals ride on per form (ADR-0003: subjective, never gates).
-		// Clonability is their tunable weighted mean, or null until they're scored —
-		// so the Listing still renders on the Proven gate alone (graceful degradation).
-		const signals = input.enrichmentByForm?.[form] ?? null;
-
 		listings.push({
 			channelId: input.channelId,
 			form,
@@ -286,8 +274,8 @@ export function deriveListings<Cid>(
 			momentum,
 			saturation,
 			stage: stageFor(momentum, saturation),
-			clonability: computeClonability(signals, form),
-			signals,
+			clonability: null,
+			signals: null,
 		});
 	}
 

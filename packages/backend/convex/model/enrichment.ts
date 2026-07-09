@@ -1,11 +1,11 @@
 "use node";
 
 /**
- * The humble multimodal Enrichment adapter (ADR-0003, Slice 5).
+ * The humble multimodal Enrichment adapter (ADR-0003, ADR-0006).
  *
  * Produces the subjective Clonability signals: a single multimodal Claude call
- * over a channel's metadata, recent video titles, and recent thumbnail images,
- * returning a {score 0–100, rationale} per form-appropriate signal (CONTEXT.md:
+ * over a channel's metadata, recent short-form titles, and recent thumbnail
+ * images, returning a {score 0–100, rationale} per supported short-form signal (CONTEXT.md:
  * Enrichment). Like the YouTube and embeddings adapters this is a "humble object" —
  * it only maps the request/response and holds no policy. The tunable weighting
  * that turns these signals into Clonability lives in the pure `clonability.ts`, and
@@ -17,18 +17,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
+	CHANNEL_SIGNAL_NAMES,
 	type EnrichmentAdapter,
 	type EnrichmentInput,
 	SIGNAL_DEFINITIONS,
 	SIGNAL_LABELS,
-	SIGNAL_SETS,
 	type Signals,
 } from "./clonability";
-import type { Form } from "./deriveListings";
 
 /**
  * The Enrichment model. Haiku is the cheapest multimodal tier — the right fit for
- * a humble, recurring per-Listing scoring pass over titles + thumbnails. Swap here
+ * a humble, recurring per-Channel scoring pass over titles + thumbnails. Swap here
  * (or via `EnrichmentOptions.model`) to trade cost for sharper judgment.
  */
 const DEFAULT_MODEL = "claude-haiku-4-5";
@@ -47,7 +46,7 @@ const MAX_DESCRIPTION_CHARS = 500;
 const MAX_TOKENS = 1024;
 
 const SYSTEM_PROMPT =
-	"You assess a YouTube channel as a *clone target*: how attractive it would be for an operator to build a new channel replicating its proven niche and format (not to buy it). Judge only the requested signals for the given content form, grounded in the metadata, recent titles, and thumbnail images provided. Be decisive and concise. Always report via the record_signals tool.";
+	"You assess a short-form YouTube channel as a *clone target*: how attractive it would be for an operator to build a new channel replicating its proven niche and format (not to buy it). Judge only Automatable, Transformative, and Improvable, grounded in the channel metadata, recent Shorts titles, and thumbnail images provided. Be decisive and concise. Always report via the record_signals tool.";
 
 export type EnrichmentOptions = {
 	/** Override the model id (defaults to a cheap multimodal tier). */
@@ -55,13 +54,13 @@ export type EnrichmentOptions = {
 };
 
 /**
- * JSON Schema for the record_signals tool, built from the form's signal set.
+ * JSON Schema for the record_signals tool, built from the Channel signal set.
  * Score bounds live in the descriptions and are clamped downstream, since strict
  * structured schemas don't support numeric min/max.
  */
-function signalsSchema(form: Form) {
+function signalsSchema() {
 	const properties: Record<string, unknown> = {};
-	for (const name of SIGNAL_SETS[form]) {
+	for (const name of CHANNEL_SIGNAL_NAMES) {
 		properties[name] = {
 			type: "object",
 			properties: {
@@ -81,7 +80,7 @@ function signalsSchema(form: Form) {
 	return {
 		type: "object" as const,
 		properties,
-		required: [...SIGNAL_SETS[form]],
+		required: [...CHANNEL_SIGNAL_NAMES],
 		additionalProperties: false,
 	};
 }
@@ -103,14 +102,14 @@ function buildUserText(input: EnrichmentInput): string {
 		.slice(0, MAX_TITLES);
 	if (titles.length > 0) {
 		lines.push(
-			`Recent ${input.form}-form uploads:`,
+			"Recent short-form uploads:",
 			...titles.map((title) => `- ${title}`),
 		);
 	}
 	lines.push(
 		"",
 		"Score each signal 0–100 (higher = more true of this channel), each with a one-line rationale:",
-		...SIGNAL_SETS[input.form].map(
+		...CHANNEL_SIGNAL_NAMES.map(
 			(name) => `- ${SIGNAL_LABELS[name]}: ${SIGNAL_DEFINITIONS[name]}`,
 		),
 	);
@@ -118,18 +117,18 @@ function buildUserText(input: EnrichmentInput): string {
 }
 
 /**
- * Coerce the tool call's input into well-formed Signals for the form: keep only
- * the form's signals, clamp scores to 0–100, default a missing rationale to empty.
+ * Coerce the tool call's input into well-formed Channel Signals: keep only
+ * supported short-form signals, clamp scores to 0–100, default missing rationale to empty.
  * Strict tool use already guarantees the shape; this is belt-and-suspenders so a
  * malformed field can never poison the downstream Clonability mean.
  */
-function normalizeSignals(raw: unknown, form: Form): Signals {
+function normalizeSignals(raw: unknown): Signals {
 	const record = (raw ?? {}) as Record<
 		string,
 		{ score?: unknown; rationale?: unknown } | undefined
 	>;
 	const signals: Signals = {};
-	for (const name of SIGNAL_SETS[form]) {
+	for (const name of CHANNEL_SIGNAL_NAMES) {
 		const entry = record[name];
 		if (!entry) {
 			continue;
@@ -173,8 +172,9 @@ export function createAnthropicEnrichmentAdapter(
 				tools: [
 					{
 						name: "record_signals",
-						description: `Record the clonability signal scores for this ${input.form}-form channel.`,
-						input_schema: signalsSchema(input.form),
+						description:
+							"Record the clonability signal scores for this short-form channel.",
+						input_schema: signalsSchema(),
 						strict: true,
 					},
 				],
@@ -199,7 +199,7 @@ export function createAnthropicEnrichmentAdapter(
 			if (!toolUse) {
 				throw new Error("enrichment: model did not return record_signals");
 			}
-			return normalizeSignals(toolUse.input, input.form);
+			return normalizeSignals(toolUse.input);
 		},
 	};
 }

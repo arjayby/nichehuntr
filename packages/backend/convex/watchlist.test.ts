@@ -81,7 +81,6 @@ async function addShorts(
 async function addEnrichment(ctx: MutationCtx, channelId: Id<"channels">) {
 	await ctx.db.insert("enrichments", {
 		channelId,
-		form: "short",
 		fingerprint: `fp_${channelId}`,
 		enrichedAt: Date.now(),
 		signals: {

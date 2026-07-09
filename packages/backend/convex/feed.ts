@@ -2,6 +2,7 @@ import { v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
+import { channelEnrichmentFor } from "./model/channelEnrichment";
 import {
 	type ChannelLifecycleStage,
 	deriveChannelLifecycle,
@@ -86,15 +87,6 @@ async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
 	);
 }
 
-async function shortEnrichmentFor(ctx: QueryCtx, channelId: Id<"channels">) {
-	return ctx.db
-		.query("enrichments")
-		.withIndex("by_channel_and_form", (q) =>
-			q.eq("channelId", channelId).eq("form", "short"),
-		)
-		.unique();
-}
-
 /**
  * The Feed: visible Channels grouped into lifecycle columns and sorted by
  * Clonability. It is a shared, global surface and requires an active subscription.
@@ -119,7 +111,7 @@ export const feed = query({
 		for (const channel of channels) {
 			const [videos, enrichment] = await Promise.all([
 				videosForLifecycle(ctx, channel._id),
-				shortEnrichmentFor(ctx, channel._id),
+				channelEnrichmentFor(ctx, channel._id),
 			]);
 			const lifecycle = deriveChannelLifecycle({
 				subscriberCount: channel.subscriberCount ?? 0,
@@ -137,7 +129,7 @@ export const feed = query({
 				channelId: channel._id,
 				stage: lifecycle.stage,
 				evidence: lifecycle.evidence,
-				clonability: computeClonability(enrichment?.signals ?? null, "short"),
+				clonability: computeClonability(enrichment?.signals ?? null),
 				signals: enrichment?.signals ?? null,
 				channel: {
 					ytId: channel.ytId,
