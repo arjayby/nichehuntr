@@ -27,13 +27,10 @@ import {
 import { toggleEntryOptimistic } from "@/lib/watchlist-optimistic";
 
 // The open channel-detail modal, deep-linked in the URL: `channel` is the
-// channel id, `form` its Short/Long variant. Both present ⇒ the modal is open,
-// so Back closes it and the detail is shareable. Independent of the Feed's own
-// Short/Long toggle (which stays local state — you can inspect a saved Long
-// channel while the Feed shows Shorts).
+// channel id. Present ⇒ the modal is open, so Back closes it and the detail is
+// shareable.
 const searchSchema = z.object({
 	channel: z.string().optional().catch(undefined),
-	form: z.enum(["short", "long"]).optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_auth/_subscribed/feed")({
@@ -41,23 +38,16 @@ export const Route = createFileRoute("/_auth/_subscribed/feed")({
 	component: FeedPage,
 });
 
-type Form = "short" | "long";
 type Stage = FeedGroup["stage"];
-const FEED_WATCHLIST_FORM: Form = "short";
-
-/** The saved-state key the Feed paints on cards: the entry's channel + form. */
-function savedKey(channelId: string, form: Form): string {
-	return `${channelId}:${form}`;
-}
 
 function FeedPage() {
 	const navigate = Route.useNavigate();
 	const search = Route.useSearch();
 	const groups = useQuery(api.feed.feed, {});
 
-	// The whole Watchlist, independent of the form lens: it feeds the drawer
-	// (Folders + root entries) and the saved-state keys painted on cards under
-	// both toggles. The keys flatten across every Folder and the root.
+	// The whole Watchlist: it feeds the drawer (Folders + root entries) and the
+	// saved-state keys painted on cards. The keys flatten across every Folder and
+	// the root.
 	const watchlist = useQuery(api.watchlist.list);
 	const savedKeys = useMemo(() => {
 		if (watchlist === undefined) {
@@ -67,10 +57,10 @@ function FeedPage() {
 			...watchlist.root,
 			...watchlist.folders.flatMap((folder) => folder.entries),
 		];
-		return new Set(all.map((entry) => savedKey(entry.channelId, entry.form)));
+		return new Set(all.map((entry) => entry.channelId));
 	}, [watchlist]);
-	// The detail modal's LIVE state — the (channel, form) it shows plus the
-	// identity we already held for it (ADR-0004 entry identity). Kept in local
+	// The detail modal's LIVE state — the Channel it shows plus the identity we
+	// already held for it (Watchlist entry identity). Kept in local
 	// state, not read off the URL, so open/close flip synchronously: the Dialog is
 	// controlled, and gating its `open` on a `navigate()` round-trip is what made
 	// opening and closing feel slow (Base UI won't start the enter/exit animation
@@ -80,33 +70,27 @@ function FeedPage() {
 		selection: WatchlistSelection;
 		seed: ChannelDetailSeed | null;
 	} | null>(() =>
-		search.channel && search.form
+		search.channel
 			? {
 					selection: {
 						channelId: search.channel as Id<"channels">,
-						form: search.form,
 					},
 					seed: null,
 				}
 			: null,
 	);
 	const selection = detail?.selection ?? null;
-	// The identity we already hold for a (channel, form) — the clicked card or
-	// saved row — so the modal paints its header instantly instead of on a
+	// The identity we already hold for a Channel — the clicked card or saved row
+	// — so the modal paints its header instantly instead of on a
 	// spinner. Found in the loaded Feed groups first, else the Watchlist; absent
 	// on a cold deep-link (nothing loaded/clicked), where the header skeletons in.
 	const resolveSeed = (sel: WatchlistSelection): ChannelDetailSeed | null => {
-		const matches = (channelId: string, form: Form) =>
-			channelId === sel.channelId && form === sel.form;
 		if (groups !== undefined) {
 			for (const group of groups) {
-				const card = group.cards.find((c) =>
-					matches(c.channelId, FEED_WATCHLIST_FORM),
-				);
+				const card = group.cards.find((c) => c.channelId === sel.channelId);
 				if (card !== undefined) {
 					return {
 						channelId: card.channelId,
-						form: FEED_WATCHLIST_FORM,
 						channel: card.channel,
 					};
 				}
@@ -117,11 +101,10 @@ function FeedPage() {
 				...watchlist.root,
 				...watchlist.folders.flatMap((folder) => folder.entries),
 			];
-			const entry = entries.find((e) => matches(e.channelId, e.form));
+			const entry = entries.find((e) => e.channelId === sel.channelId);
 			if (entry !== undefined) {
 				return {
 					channelId: entry.channelId,
-					form: entry.form,
 					channel: entry.channel,
 				};
 			}
@@ -133,18 +116,16 @@ function FeedPage() {
 	// URL catches up it already agrees here and this no-ops (preserving the seed).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: sync on URL only.
 	useEffect(() => {
-		const urlSelection: WatchlistSelection | null =
-			search.channel && search.form
-				? { channelId: search.channel as Id<"channels">, form: search.form }
-				: null;
+		const urlSelection: WatchlistSelection | null = search.channel
+			? { channelId: search.channel as Id<"channels"> }
+			: null;
 		setDetail((prev) => {
 			const prevSel = prev?.selection ?? null;
 			const agree =
 				(prevSel === null && urlSelection === null) ||
 				(prevSel !== null &&
 					urlSelection !== null &&
-					prevSel.channelId === urlSelection.channelId &&
-					prevSel.form === urlSelection.form);
+					prevSel.channelId === urlSelection.channelId);
 			if (agree) {
 				return prev;
 			}
@@ -152,16 +133,15 @@ function FeedPage() {
 				? null
 				: { selection: urlSelection, seed: resolveSeed(urlSelection) };
 		});
-	}, [search.channel, search.form]);
+	}, [search.channel]);
 	const selectionSaved =
-		selection !== null &&
-		savedKeys.has(savedKey(selection.channelId, selection.form));
+		selection !== null && savedKeys.has(selection.channelId);
 	const openDetail = (sel: WatchlistSelection) => {
 		// Flip local state first (instant animation), then mirror to the URL for
 		// deep-linking + Back — the navigate runs in the background off the path.
 		setDetail({ selection: sel, seed: resolveSeed(sel) });
 		navigate({
-			search: (prev) => ({ ...prev, channel: sel.channelId, form: sel.form }),
+			search: (prev) => ({ ...prev, channel: sel.channelId }),
 		});
 	};
 	const closeDetail = () => {
@@ -171,50 +151,47 @@ function FeedPage() {
 		// explicit close (×/Escape/backdrop) would reopen the modal.
 		navigate({
 			replace: true,
-			search: (prev) => ({ ...prev, channel: undefined, form: undefined }),
+			search: (prev) => ({ ...prev, channel: undefined }),
 		});
 	};
 	// Save/unsave is decoupled from opening the modal: the bookmark just toggles
-	// the (channel, form) pair. `toggle` validates its args strictly, so only the
-	// pair may ride along — no extra entry fields. The optimistic update paints
+	// the Channel. `toggle` validates its args strictly, so only the Channel may
+	// ride along — no extra entry fields. The optimistic update paints
 	// the change instantly: a remove filters the pair out of the cached list; an
 	// add prepends a synthesized root row, sourcing the channel identity from data
 	// already in scope — the open detail modal's seed first (covers a selection
 	// off the current Feed lens), then the loaded Feed / Watchlist via resolveSeed.
 	// Convex rolls the overlay back on rejection, where the `.catch` toast fires.
 	const toggleSave = useMutation(api.watchlist.toggle).withOptimisticUpdate(
-		(store, { channelId, form }) => {
+		(store, { channelId }) => {
 			const list = store.getQuery(api.watchlist.list, {});
 			if (list === undefined) {
 				return;
 			}
 			const detailSeed =
-				detail?.seed &&
-				detail.seed.channelId === channelId &&
-				detail.seed.form === form
+				detail?.seed && detail.seed.channelId === channelId
 					? detail.seed
 					: null;
-			const identity = detailSeed ?? resolveSeed({ channelId, form });
+			const identity = detailSeed ?? resolveSeed({ channelId });
 			store.setQuery(
 				api.watchlist.list,
 				{},
-				toggleEntryOptimistic(list, channelId, form, identity?.channel ?? null),
+				toggleEntryOptimistic(list, channelId, identity?.channel ?? null),
 			);
 		},
 	);
 	const toggleSaveSelection = (sel: WatchlistSelection) => {
-		toggleSave({ channelId: sel.channelId, form: sel.form }).catch(() => {
+		toggleSave({ channelId: sel.channelId }).catch(() => {
 			toast.error("Could not update your Watchlist.");
 		});
 	};
 	const handleToggleSave = (card: FeedCard) => {
 		toggleSaveSelection({
 			channelId: card.channelId,
-			form: FEED_WATCHLIST_FORM,
 		});
 	};
 	const handleRemoveEntry = (entry: WatchlistEntry) => {
-		toggleSaveSelection({ channelId: entry.channelId, form: entry.form });
+		toggleSaveSelection({ channelId: entry.channelId });
 	};
 
 	const drawer = useWatchlistDrawerOpen();
@@ -334,7 +311,7 @@ function FeedColumn({
 					<ListingCard
 						key={card.channelId}
 						card={card}
-						saved={savedKeys.has(savedKey(card.channelId, FEED_WATCHLIST_FORM))}
+						saved={savedKeys.has(card.channelId)}
 						onToggleSave={onToggleSave}
 						onOpen={onOpen}
 					/>

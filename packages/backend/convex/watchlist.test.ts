@@ -5,10 +5,13 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 
+const DAY = 24 * 60 * 60 * 1000;
+
 async function addChannel(
 	ctx: MutationCtx,
 	title: string,
 	description?: string,
+	opts: { subscriberCount?: number } = {},
 ): Promise<Id<"channels">> {
 	return ctx.db.insert("channels", {
 		ytId: `yt_${title.replace(/\s+/g, "_")}`,
@@ -16,19 +19,86 @@ async function addChannel(
 		handle: title.toLowerCase().replace(/\s+/g, ""),
 		avatarUrl: `https://img/${title}.jpg`,
 		description,
+		subscriberCount: opts.subscriberCount ?? 1_000,
 		discoveredAt: Date.now(),
 		source: "seed",
 	});
 }
 
+async function addVideo(
+	ctx: MutationCtx,
+	opts: {
+		channelId: Id<"channels">;
+		title: string;
+		viewCount?: number;
+		publishedAt: number;
+		durationSec?: number;
+		isStandard?: boolean;
+		writeCurrentCount?: boolean;
+	},
+) {
+	const viewCount = opts.viewCount ?? 0;
+	const videoId = await ctx.db.insert("videos", {
+		ytId: opts.title.toLowerCase().replace(/\s+/g, "_"),
+		channelId: opts.channelId,
+		title: opts.title,
+		thumbnailUrl: `https://img/${opts.title}.jpg`,
+		durationSec: opts.durationSec ?? 45,
+		form: (opts.durationSec ?? 45) <= 300 ? "short" : "long",
+		publishedAt: opts.publishedAt,
+		currentViewCount: opts.writeCurrentCount === false ? undefined : viewCount,
+		isStandard: opts.isStandard ?? true,
+	});
+	if (opts.writeCurrentCount === false && opts.viewCount !== undefined) {
+		await ctx.db.insert("videoSnapshots", {
+			videoId,
+			viewCount,
+			at: Date.now(),
+		});
+	}
+	return videoId;
+}
+
+async function addShorts(
+	ctx: MutationCtx,
+	channelId: Id<"channels">,
+	viewCounts: number[],
+	opts: { startAgeDays?: number } = {},
+) {
+	const startAgeDays = opts.startAgeDays ?? 1;
+	await Promise.all(
+		viewCounts.map((viewCount, index) =>
+			addVideo(ctx, {
+				channelId,
+				title: `${channelId} short ${index}`,
+				viewCount,
+				publishedAt: Date.now() - (startAgeDays + index) * DAY,
+			}),
+		),
+	);
+}
+
+async function addEnrichment(ctx: MutationCtx, channelId: Id<"channels">) {
+	await ctx.db.insert("enrichments", {
+		channelId,
+		form: "short",
+		fingerprint: `fp_${channelId}`,
+		enrichedAt: Date.now(),
+		signals: {
+			automatable: { score: 90, rationale: "Templated AI voiceover." },
+			transformative: { score: 70, rationale: "Repackages story prompts." },
+			improvable: { score: 55, rationale: "Thumbnails are lazy." },
+		},
+	});
+}
+
 describe("watchlist", () => {
-	it("saves a (channel, form) on toggle and lists it at the root with channel identity", async () => {
+	it("saves a Channel on toggle and lists it at the root with channel identity", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) => addChannel(ctx, "AI Horror"));
 
 		const result = await operator.mutation(api.watchlist.toggle, {
 			channelId,
-			form: "short",
 		});
 		expect(result).toEqual({ saved: true });
 
@@ -37,7 +107,6 @@ describe("watchlist", () => {
 		expect(root).toHaveLength(1);
 		expect(root[0]).toMatchObject({
 			channelId,
-			form: "short",
 			folderId: null,
 			channel: {
 				ytId: "yt_AI_Horror",
@@ -48,14 +117,13 @@ describe("watchlist", () => {
 		});
 	});
 
-	it("unsaves on the second toggle — saving the same card twice is impossible", async () => {
+	it("unsaves on the second toggle — saving the same Channel twice is impossible", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) => addChannel(ctx, "AI Horror"));
 
-		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
+		await operator.mutation(api.watchlist.toggle, { channelId });
 		const second = await operator.mutation(api.watchlist.toggle, {
 			channelId,
-			form: "short",
 		});
 		expect(second).toEqual({ saved: false });
 
@@ -63,21 +131,41 @@ describe("watchlist", () => {
 		expect(root).toEqual([]);
 	});
 
-	it("keeps a straddling channel's two form faces as two distinct entries", async () => {
+	it("dedupes on Channel only", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) => addChannel(ctx, "Straddler"));
 
-		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
-		await operator.mutation(api.watchlist.toggle, { channelId, form: "long" });
+		await operator.mutation(api.watchlist.toggle, { channelId });
+		const second = await operator.mutation(api.watchlist.toggle, { channelId });
 
 		const { root } = await operator.query(api.watchlist.list, {});
-		expect(root).toHaveLength(2);
-		expect(root.map((e) => e.form).sort()).toEqual(["long", "short"]);
+		expect(second).toEqual({ saved: false });
+		expect(root).toEqual([]);
+	});
 
-		// Unsaving one face leaves the other untouched.
-		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
-		const remaining = await operator.query(api.watchlist.list, {});
-		expect(remaining.root.map((e) => e.form)).toEqual(["long"]);
+	it("collapses duplicate stored rows and unsaves all duplicates for a Channel", async () => {
+		const { t, operator } = await setup();
+		const channelId = await t.run((ctx) => addChannel(ctx, "Duplicate"));
+		await operator.mutation(api.watchlist.toggle, { channelId });
+
+		await t.run(async (ctx) => {
+			const existing = await ctx.db.query("watchlistEntries").first();
+			if (existing === null) throw new Error("missing saved row");
+			await ctx.db.insert("watchlistEntries", {
+				operatorId: existing.operatorId,
+				channelId,
+			});
+		});
+
+		expect((await operator.query(api.watchlist.list, {})).root).toHaveLength(1);
+
+		const result = await operator.mutation(api.watchlist.toggle, { channelId });
+		expect(result).toEqual({ saved: false });
+		expect((await operator.query(api.watchlist.list, {})).root).toEqual([]);
+		const rows = await t.run((ctx) =>
+			ctx.db.query("watchlistEntries").take(10),
+		);
+		expect(rows).toEqual([]);
 	});
 
 	it("scopes entries to the calling Operator", async () => {
@@ -85,12 +173,12 @@ describe("watchlist", () => {
 		const rival = await asSubscribedOperator(t, "rival");
 		const channelId = await t.run((ctx) => addChannel(ctx, "Contested"));
 
-		await operator.mutation(api.watchlist.toggle, { channelId, form: "short" });
+		await operator.mutation(api.watchlist.toggle, { channelId });
 
 		expect((await rival.query(api.watchlist.list, {})).root).toEqual([]);
 
-		// The rival saving the same card is their own entry, not a dedupe hit.
-		await rival.mutation(api.watchlist.toggle, { channelId, form: "short" });
+		// The rival saving the same Channel is their own entry, not a dedupe hit.
+		await rival.mutation(api.watchlist.toggle, { channelId });
 		expect((await rival.query(api.watchlist.list, {})).root).toHaveLength(1);
 		expect((await operator.query(api.watchlist.list, {})).root).toHaveLength(1);
 	});
@@ -102,11 +190,9 @@ describe("watchlist", () => {
 
 		await operator.mutation(api.watchlist.toggle, {
 			channelId: first,
-			form: "short",
 		});
 		await operator.mutation(api.watchlist.toggle, {
 			channelId: second,
-			form: "long",
 		});
 
 		const { root } = await operator.query(api.watchlist.list, {});
@@ -116,7 +202,7 @@ describe("watchlist", () => {
 		]);
 	});
 
-	it("detail re-derives the live Listing join when the Listing is on the Feed", async () => {
+	it("detail re-derives live Feed state when the Channel is on the Feed", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run(async (ctx) => {
 			const id = await addChannel(
@@ -124,32 +210,17 @@ describe("watchlist", () => {
 				"AI Horror",
 				"Nightly AI horror shorts.",
 			);
-			await ctx.db.insert("listings", {
-				channelId: id,
-				form: "short",
-				proven: true,
-				medianViews: 800_000,
-				baseline: 800_000,
-				momentum: 0.12,
-				saturation: 2,
-				stage: "breaking_out",
-				clonability: 78,
-				signals: {
-					automatable: { score: 90, rationale: "Templated AI voiceover." },
-					improvable: { score: 55, rationale: "Thumbnails are lazy." },
-				},
-			});
+			await addShorts(ctx, id, [120_000, 130_000, 10_000]);
+			await addEnrichment(ctx, id);
 			return id;
 		});
 
 		const detail = await operator.query(api.watchlist.detail, {
 			channelId,
-			form: "short",
 		});
 
 		expect(detail).toMatchObject({
 			channelId,
-			form: "short",
 			channel: {
 				ytId: "yt_AI_Horror",
 				title: "AI Horror",
@@ -157,61 +228,52 @@ describe("watchlist", () => {
 				avatarUrl: "https://img/AI Horror.jpg",
 				description: "Nightly AI horror shorts.",
 			},
-			listing: {
+			feed: {
 				stage: "breaking_out",
-				medianViews: 800_000,
-				momentum: 0.12,
-				saturation: 2,
-				clonability: 78,
+				evidence: {
+					fetchedShorts: 3,
+					recentShortsChecked: 3,
+					shortsAtOrAbove50k: 2,
+					shortsAtOrAbove100k: 2,
+				},
+				clonability: 76,
 				signals: {
 					automatable: { score: 90, rationale: "Templated AI voiceover." },
+					transformative: { score: 70, rationale: "Repackages story prompts." },
 					improvable: { score: 55, rationale: "Thumbnails are lazy." },
 				},
 			},
 		});
 	});
 
-	it("detail degrades to identity + a null listing when the pair is off the Feed", async () => {
+	it("detail degrades to identity + null Feed state when the Channel is off the Feed", async () => {
 		const { t, operator } = await setup();
 		const { goneId, unprovenId } = await t.run(async (ctx) => {
 			const goneId = await addChannel(ctx, "Vanished", "Used to be hot.");
-			// No listing row at all — recompute dropped the pair entirely.
+			// No videos at all — lifecycle keeps the Channel Tracked/hidden.
 			const unprovenId = await addChannel(ctx, "Faded");
-			await ctx.db.insert("listings", {
-				channelId: unprovenId,
-				form: "short",
-				proven: false,
-				medianViews: 40_000,
-				baseline: null,
-				momentum: null,
-				saturation: null,
-				stage: "established",
-				clonability: null,
-				signals: null,
-			});
+			await addShorts(ctx, unprovenId, [40_000, 30_000, 20_000]);
 			return { goneId, unprovenId };
 		});
 
 		const gone = await operator.query(api.watchlist.detail, {
 			channelId: goneId,
-			form: "short",
 		});
 		expect(gone).toMatchObject({
 			channel: { title: "Vanished", description: "Used to be hot." },
-			listing: null,
+			feed: null,
 		});
 
 		const unproven = await operator.query(api.watchlist.detail, {
 			channelId: unprovenId,
-			form: "short",
 		});
 		expect(unproven).toMatchObject({
 			channel: { title: "Faded" },
-			listing: null,
+			feed: null,
 		});
 	});
 
-	it("detail's uploads strip is the last 12 standard videos of the entry's form, newest-first, with latest snapshot counts", async () => {
+	it("detail's uploads strip is the last 12 standard Shorts, newest-first, with latest snapshot counts", async () => {
 		const { t, operator } = await setup();
 		const base = Date.UTC(2026, 0, 1);
 		const day = 24 * 60 * 60 * 1000;
@@ -219,15 +281,11 @@ describe("watchlist", () => {
 			const channelId = await addChannel(ctx, "Prolific");
 			// 14 standard shorts — only the newest 12 belong on the strip.
 			for (let i = 0; i < 14; i++) {
-				const videoId = await ctx.db.insert("videos", {
-					ytId: `short_${i}`,
+				const videoId = await addVideo(ctx, {
 					channelId,
 					title: `Short ${i}`,
-					thumbnailUrl: `https://img/short_${i}.jpg`,
-					durationSec: 60,
-					form: "short",
 					publishedAt: base + i * day,
-					isStandard: true,
+					writeCurrentCount: false,
 				});
 				// Two snapshots for the newest video: the strip shows the latest count.
 				if (i === 13) {
@@ -244,21 +302,15 @@ describe("watchlist", () => {
 				}
 			}
 			// Wrong form and non-standard items never reach the strip.
-			await ctx.db.insert("videos", {
-				ytId: "long_video",
+			await addVideo(ctx, {
 				channelId,
 				title: "Long video",
 				durationSec: 900,
-				form: "long",
 				publishedAt: base + 20 * day,
-				isStandard: true,
 			});
-			await ctx.db.insert("videos", {
-				ytId: "live_stream",
+			await addVideo(ctx, {
 				channelId,
 				title: "Live stream",
-				durationSec: 60,
-				form: "short",
 				publishedAt: base + 21 * day,
 				isStandard: false,
 			});
@@ -267,7 +319,6 @@ describe("watchlist", () => {
 
 		const detail = await operator.query(api.watchlist.detail, {
 			channelId,
-			form: "short",
 		});
 
 		expect(detail?.uploads).toHaveLength(12);
@@ -277,7 +328,7 @@ describe("watchlist", () => {
 		expect(detail?.uploads[0]).toMatchObject({
 			ytId: "short_13",
 			title: "Short 13",
-			thumbnailUrl: "https://img/short_13.jpg",
+			thumbnailUrl: "https://img/Short 13.jpg",
 			publishedAt: base + 13 * day,
 			viewCount: 250_000, // the latest snapshot, not the first
 		});
@@ -285,60 +336,27 @@ describe("watchlist", () => {
 		expect(detail?.uploads[1]?.viewCount).toBeNull();
 	});
 
-	it("entries flag whether each pair is still on the Feed", async () => {
+	it("entries flag whether each Channel is still on the Feed", async () => {
 		const { t, operator } = await setup();
 		const { liveId, fadedId } = await t.run(async (ctx) => {
 			const liveId = await addChannel(ctx, "Still Live");
-			await ctx.db.insert("listings", {
-				channelId: liveId,
-				form: "short",
-				proven: true,
-				medianViews: 900_000,
-				baseline: null,
-				momentum: null,
-				saturation: null,
-				stage: "emerging",
-				clonability: null,
-				signals: null,
-			});
-			// The same channel's *long* face is unproven — it must not vouch for
-			// the short entry, and vice versa (a Listing is per (channel, form)).
-			await ctx.db.insert("listings", {
-				channelId: liveId,
-				form: "long",
-				proven: false,
-				medianViews: 10_000,
-				baseline: null,
-				momentum: null,
-				saturation: null,
-				stage: "established",
-				clonability: null,
-				signals: null,
-			});
+			await addShorts(ctx, liveId, [80_000, 60_000, 10_000]);
 			const fadedId = await addChannel(ctx, "Faded Away");
+			await addShorts(ctx, fadedId, [40_000, 30_000, 20_000]);
 			return { liveId, fadedId };
 		});
 
 		await operator.mutation(api.watchlist.toggle, {
 			channelId: liveId,
-			form: "short",
-		});
-		await operator.mutation(api.watchlist.toggle, {
-			channelId: liveId,
-			form: "long",
 		});
 		await operator.mutation(api.watchlist.toggle, {
 			channelId: fadedId,
-			form: "short",
 		});
 
 		const { root } = await operator.query(api.watchlist.list, {});
-		const byKey = new Map(
-			root.map((e) => [`${e.channel.title}:${e.form}`, e.onFeed]),
-		);
-		expect(byKey.get("Still Live:short")).toBe(true);
-		expect(byKey.get("Still Live:long")).toBe(false);
-		expect(byKey.get("Faded Away:short")).toBe(false);
+		const byTitle = new Map(root.map((e) => [e.channel.title, e.onFeed]));
+		expect(byTitle.get("Still Live")).toBe(true);
+		expect(byTitle.get("Faded Away")).toBe(false);
 	});
 
 	it("requires authentication", async () => {
@@ -346,14 +364,14 @@ describe("watchlist", () => {
 		const channelId = await t.run((ctx) => addChannel(ctx, "Locked"));
 
 		await expect(
-			t.mutation(api.watchlist.toggle, { channelId, form: "short" }),
+			t.mutation(api.watchlist.toggle, { channelId }),
 		).rejects.toThrow(/authenticated/i);
 		await expect(t.query(api.watchlist.list, {})).rejects.toThrow(
 			/authenticated/i,
 		);
-		await expect(
-			t.query(api.watchlist.detail, { channelId, form: "short" }),
-		).rejects.toThrow(/authenticated/i);
+		await expect(t.query(api.watchlist.detail, { channelId })).rejects.toThrow(
+			/authenticated/i,
+		);
 	});
 });
 
@@ -362,12 +380,11 @@ describe("watchlist folders", () => {
 	async function saveEntry(
 		operator: Awaited<ReturnType<typeof asSubscribedOperator>>,
 		channelId: Id<"channels">,
-		form: "short" | "long" = "short",
 	): Promise<Id<"watchlistEntries">> {
-		await operator.mutation(api.watchlist.toggle, { channelId, form });
+		await operator.mutation(api.watchlist.toggle, { channelId });
 		const { root, folders } = await operator.query(api.watchlist.list, {});
 		const all = [...root, ...folders.flatMap((f) => f.entries)];
-		const entry = all.find((e) => e.channelId === channelId && e.form === form);
+		const entry = all.find((e) => e.channelId === channelId);
 		if (entry === undefined) throw new Error("entry not found after save");
 		return entry.entryId;
 	}
@@ -566,7 +583,6 @@ describe("watchlist folders", () => {
 			const entryId = await ctx.db.insert("watchlistEntries", {
 				operatorId: "someone",
 				channelId,
-				form: "short",
 			});
 			const folderId = await ctx.db.insert("watchlistFolders", {
 				operatorId: "someone",

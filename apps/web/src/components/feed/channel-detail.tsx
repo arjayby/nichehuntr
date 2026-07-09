@@ -25,26 +25,22 @@ import {
 	ClonabilityRead,
 	channelUrl,
 	compactViews,
-	FormBadge,
 	initials,
-	MomentumIndicator,
-	SaturationRead,
 	STAGE_LABELS,
 } from "@/components/feed/listing-card";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The identity we can paint the instant the modal opens — the (channel, form)
- * plus the channel's name/avatar/handle we already held on the clicked card or
- * saved row. It seeds the header so the modal never opens on a bare spinner; the
+ * The identity we can paint the instant the modal opens — the Channel plus the
+ * name/avatar/handle we already held on the clicked card or saved row. It seeds
+ * the header so the modal never opens on a bare spinner; the
  * scored body skeletons in until `watchlist.detail` resolves. Deep-links have no
  * seed (nothing was clicked), so the header skeletons too. Shape is a subset of
  * both `FeedCard` and `WatchlistEntry`, so either can produce one directly.
  */
 export type ChannelDetailSeed = {
 	channelId: Id<"channels">;
-	form: WatchlistDetail["form"];
 	channel: {
 		ytId: string;
 		title: string;
@@ -58,7 +54,6 @@ export type ChannelDetailSeed = {
 function identityFromDetail(detail: WatchlistDetail): ChannelDetailSeed {
 	return {
 		channelId: detail.channelId,
-		form: detail.form,
 		channel: detail.channel,
 	};
 }
@@ -100,7 +95,7 @@ function UploadTile({ upload }: { upload: WatchlistUpload }) {
 	);
 }
 
-/** The last ~12 standard uploads of the entry's form, newest-first, as a
+/** The last ~12 standard short-form uploads, newest-first, as a
  * horizontally scrolling strip. Videos persist, so this renders in the
  * degraded off-feed state too. */
 function UploadsStrip({ uploads }: { uploads: WatchlistUpload[] }) {
@@ -125,14 +120,12 @@ function UploadsStrip({ uploads }: { uploads: WatchlistUpload[] }) {
 /** Every scored signal with its untruncated rationale — the full "why" behind
  * the Clonability number, not the card's top-two teaser. */
 function SignalBreakdown({
-	listing,
-	form,
+	feed,
 }: {
-	listing: NonNullable<WatchlistDetail["listing"]>;
-	form: WatchlistDetail["form"];
+	feed: NonNullable<WatchlistDetail["feed"]>;
 }) {
-	// All of the form's scored signals, not the card's top-two teaser.
-	const signals = topSignals(listing.signals, form, SIGNAL_SETS[form].length);
+	// All of the short-form scored signals, not the card's top-two teaser.
+	const signals = topSignals(feed.signals, "short", SIGNAL_SETS.short.length);
 	if (signals.length === 0) {
 		return (
 			<p className="text-muted-foreground text-xs">Signals not scored yet.</p>
@@ -175,9 +168,7 @@ function DetailControls({
 				aria-pressed={saved}
 				aria-label={saved ? "Remove from Watchlist" : "Save to Watchlist"}
 				title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
-				onClick={() =>
-					onToggleSave({ channelId: identity.channelId, form: identity.form })
-				}
+				onClick={() => onToggleSave({ channelId: identity.channelId })}
 				className={`rounded-md p-1.5 transition-colors ${
 					saved ? "text-primary" : "text-muted-foreground hover:text-foreground"
 				}`}
@@ -204,8 +195,8 @@ function DetailControls({
 	);
 }
 
-/** Identity row for the detail: avatar, title + form badge, and the channel
- * handle. The save / external / close controls ride at the far right. Paints
+/** Identity row for the detail: avatar, title, and the channel handle. The save
+ * / external / close controls ride at the far right. Paints
  * from the seed the instant the modal opens, then from the live detail. */
 function DetailHeader({
 	identity,
@@ -234,7 +225,6 @@ function DetailHeader({
 					<DialogTitle className="truncate text-sm">
 						{identity.channel.title}
 					</DialogTitle>
-					<FormBadge form={identity.form} />
 				</div>
 				<DialogDescription className="text-xs">
 					{identity.channel.handle
@@ -321,12 +311,13 @@ function DetailBodySkeleton() {
 }
 
 /**
- * The resolved detail body below the header (ADR-0004): the Listing half is
- * re-derived live, so when the pair is off the Feed the pane degrades to just the
- * description + uploads with an explicit notice — a product state, not an error —
- * since the videos persist even when the Listing doesn't.
+ * The resolved detail body below the header: Feed state is re-derived live, so
+ * when the Channel is off the Feed the pane degrades to just the description +
+ * uploads with an explicit notice — a product state, not an error — since the
+ * videos persist even when the Channel is hidden.
  */
 function DetailBodyContent({ detail }: { detail: WatchlistDetail }) {
+	const feed = detail.feed;
 	return (
 		<>
 			{detail.channel.description ? (
@@ -334,25 +325,44 @@ function DetailBodyContent({ detail }: { detail: WatchlistDetail }) {
 					{detail.channel.description}
 				</p>
 			) : null}
-			{detail.listing !== null ? (
+			{feed !== null ? (
 				<>
 					<div className="flex items-center gap-2">
 						<span className="rounded-full border border-border px-2 py-0.5 font-medium text-xs">
-							{STAGE_LABELS[detail.listing.stage]}
+							{STAGE_LABELS[feed.stage]}
 						</span>
-						<MomentumIndicator momentum={detail.listing.momentum} />
 					</div>
 					<div className="flex items-end justify-between gap-3">
 						<div>
-							<div className="text-muted-foreground text-xs">Median views</div>
+							<div className="text-muted-foreground text-xs">Subscribers</div>
 							<div className="font-semibold text-lg tabular-nums">
-								{compactViews.format(detail.listing.medianViews)}
+								{compactViews.format(feed.evidence.subscriberCount)}
 							</div>
 						</div>
-						<SaturationRead saturation={detail.listing.saturation} />
-						<ClonabilityRead clonability={detail.listing.clonability} />
+						<div className="text-center">
+							<div className="text-muted-foreground text-xs">Recent reach</div>
+							<div className="font-semibold text-lg tabular-nums">
+								{feed.evidence.shortsAtOrAbove100k}/
+								{feed.evidence.recentShortsChecked}
+							</div>
+							<div className="text-[11px] text-muted-foreground">
+								100K+ Shorts
+							</div>
+						</div>
+						<ClonabilityRead clonability={feed.clonability} />
 					</div>
-					<SignalBreakdown listing={detail.listing} form={detail.form} />
+					<div className="grid grid-cols-2 gap-2 rounded-md bg-muted/60 px-2 py-1 text-xs">
+						<span className="text-muted-foreground">Shorts fetched</span>
+						<span className="text-right font-medium tabular-nums">
+							{feed.evidence.fetchedShorts}
+						</span>
+						<span className="text-muted-foreground">50K+ Shorts</span>
+						<span className="text-right font-medium tabular-nums">
+							{feed.evidence.shortsAtOrAbove50k}/
+							{feed.evidence.recentShortsChecked}
+						</span>
+					</div>
+					<SignalBreakdown feed={feed} />
 				</>
 			) : (
 				<p className="flex items-center gap-2 rounded-2xl border border-border border-dashed px-3 py-2 text-muted-foreground text-xs">
@@ -428,7 +438,7 @@ function DetailContent({
  * The channel-details modal, opened from a Feed card or a saved Watchlist row.
  * Open state is owned by the caller (a URL search param on the Feed route), so
  * the detail is deep-linkable and the browser Back button closes it. Powered by
- * `watchlist.detail`, which resolves for any (channel, form) — saved or not — so
+ * `watchlist.detail`, which resolves for any Channel — saved or not — so
  * the modal works straight off an unsaved Feed card.
  *
  * Opens instantly: the caller's `seed` paints the header on the first frame while
