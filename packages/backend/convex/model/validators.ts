@@ -21,9 +21,9 @@ export const sourceValidator = v.union(
 	v.literal("admin"),
 );
 
-/** A Submission's lifecycle (ADR-0005, CONTEXT.md): `pending` on insert,
- * `processing` while the worker backfills, then `tracked` (ingested — Proven or
- * not) or `failed` (unresolvable paste / API error). Not-Proven is `tracked`. */
+/** A Submission's lifecycle (ADR-0005/0006, CONTEXT.md): `pending` on insert,
+ * `processing` while the worker backfills, then `tracked` (ingested, whether
+ * visible on the Feed or not) or `failed` (unresolvable paste / API error). */
 export const submissionStatusValidator = v.union(
 	v.literal("pending"),
 	v.literal("processing"),
@@ -31,12 +31,25 @@ export const submissionStatusValidator = v.union(
 	v.literal("failed"),
 );
 
-/** The machine outcome summary of a tracked Submission: how many Listings the
- * channel produced and how many of those cleared the Proven gate. */
-export const submissionOutcomeValidator = v.object({
+const legacySubmissionOutcomeValidator = v.object({
 	listings: v.number(),
 	proven: v.number(),
 });
+
+/** The machine outcome summary of a tracked Submission. New rows describe the
+ * short-form Channel lifecycle; the legacy Listing/Proven shape remains readable
+ * so pre-cutover rows don't invalidate the table before a cleanup migration. */
+export const submissionOutcomeValidator = v.union(
+	v.object({
+		stage: v.union(stageValidator, v.literal("tracked")),
+		feedVisibility: v.union(v.literal("visible"), v.literal("hidden")),
+		fetchedShorts: v.number(),
+		recentShortsChecked: v.number(),
+		shortsAtOrAbove50k: v.number(),
+		shortsAtOrAbove100k: v.number(),
+	}),
+	legacySubmissionOutcomeValidator,
+);
 
 /** Derived TS types so readers (queries, the admin table) share one source with
  * the schema and can't drift from these validators. */

@@ -67,8 +67,6 @@ function stubAdapter(opts: {
 						handle: `@${id}`,
 						subscriberCount: opts.subscriberCount,
 					})),
-		fetchVideoStats: async (ids) =>
-			ids.map((id) => ({ ytVideoId: id, viewCount: 0 })),
 		fetchChannelUploads: async (channelId, fetchOpts) => {
 			if (opts.uploadsThrow) {
 				throw new Error("YouTube API error");
@@ -93,26 +91,9 @@ function unusableAdapter(): YouTubeAdapter {
 	};
 	return {
 		fetchChannels: boom,
-		fetchVideoStats: boom,
 		fetchChannelUploads: boom,
 		resolveHandle: boom,
 	};
-}
-
-/** Channel titles with a derived Listing for a form. */
-async function listingTitles(
-	t: Awaited<ReturnType<typeof setup>>["t"],
-	form: "short" | "long",
-): Promise<string[]> {
-	return t.run(async (ctx) => {
-		const channels = await ctx.db.query("channels").collect();
-		const titleById = new Map(channels.map((c) => [c._id, c.title]));
-		const listings = await ctx.db.query("listings").collect();
-		return listings
-			.filter((listing) => listing.form === form && listing.proven)
-			.map((listing) => titleById.get(listing.channelId))
-			.filter((title): title is string => title !== undefined);
-	});
 }
 
 /** A gated instance with a signed-in Admin and a subscribed Operator: the Admin
@@ -199,6 +180,14 @@ describe("runSubmission — the ingest spine", () => {
 		expect(await submissionRow(admin, submissionId)).toMatchObject({
 			status: "tracked",
 			resolvedYtChannelId: id,
+			outcome: {
+				stage: "breaking_out",
+				feedVisibility: "visible",
+				fetchedShorts: 3,
+				recentShortsChecked: 3,
+				shortsAtOrAbove50k: 3,
+				shortsAtOrAbove100k: 3,
+			},
 		});
 
 		const titles = await feedTitlesByStage(operator);
@@ -261,7 +250,14 @@ describe("runSubmission — the ingest spine", () => {
 		);
 
 		const row = await submissionRow(admin, submissionId);
-		expect(row).toMatchObject({ status: "tracked" });
+		expect(row).toMatchObject({
+			status: "tracked",
+			outcome: {
+				stage: "tracked",
+				feedVisibility: "hidden",
+				fetchedShorts: 2,
+			},
+		});
 		expect(row?.failureReason).toBeNull();
 		expect(
 			Object.values(await feedTitlesByStage(operator)).flat(),
@@ -289,6 +285,11 @@ describe("runSubmission — the ingest spine", () => {
 
 		expect(await submissionRow(admin, submissionId)).toMatchObject({
 			status: "tracked",
+			outcome: {
+				stage: "established",
+				feedVisibility: "visible",
+				fetchedShorts: 50,
+			},
 		});
 		const titles = await feedTitlesByStage(operator);
 		expect(titles.established).toContain("Mature Shorts");
@@ -339,34 +340,6 @@ describe("runSubmission — the ingest spine", () => {
 		).not.toContain("Refreshable Shorts");
 	});
 
-	it("tracks a proven channel and derives its Listing", async () => {
-		const { t, admin } = await setup();
-		const id = ucId("proven");
-		const submissionId = await runOver(
-			t,
-			id,
-			stubAdapter({
-				title: "Proven Channel",
-				page: uploads(id, {
-					count: 5,
-					viewCount: 150_000,
-					ageDays: 60,
-					durationSec: LONG_SEC,
-				}),
-			}),
-		);
-
-		const row = await submissionRow(admin, submissionId);
-		expect(row).toMatchObject({
-			status: "tracked",
-			resolvedYtChannelId: id,
-			outcome: { listings: 1, proven: 1 },
-		});
-
-		const longTitles = await listingTitles(t, "long");
-		expect(longTitles).toContain("Proven Channel");
-	});
-
 	it("stamps submitted channels with source 'admin'", async () => {
 		const { t } = await setup();
 		const id = ucId("source");
@@ -375,10 +348,10 @@ describe("runSubmission — the ingest spine", () => {
 			id,
 			stubAdapter({
 				page: uploads(id, {
-					count: 5,
+					count: 3,
 					viewCount: 150_000,
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
@@ -392,40 +365,7 @@ describe("runSubmission — the ingest spine", () => {
 		expect(channel?.source).toBe("admin");
 	});
 
-	it("yields two Listings for a channel proven in both forms", async () => {
-		const { t, admin } = await setup();
-		const id = ucId("both");
-		const submissionId = await runOver(
-			t,
-			id,
-			stubAdapter({
-				title: "Both Forms",
-				page: [
-					...uploads(id, {
-						count: 5,
-						viewCount: 150_000,
-						ageDays: 60,
-						durationSec: LONG_SEC,
-						tag: "long",
-					}),
-					...uploads(id, {
-						count: 5,
-						viewCount: 600_000,
-						ageDays: 60,
-						durationSec: SHORT_SEC,
-						tag: "short",
-					}),
-				],
-			}),
-		);
-
-		const row = await submissionRow(admin, submissionId);
-		expect(row?.outcome).toEqual({ listings: 2, proven: 2 });
-		expect(await listingTitles(t, "long")).toContain("Both Forms");
-		expect(await listingTitles(t, "short")).toContain("Both Forms");
-	});
-
-	it("tracks (not fails) a channel that ingests but misses the Proven gate", async () => {
+	it("tracks a channel that ingests but misses Feed lifecycle rules", async () => {
 		const { t, admin } = await setup();
 		const id = ucId("weak");
 		const submissionId = await runOver(
@@ -434,10 +374,10 @@ describe("runSubmission — the ingest spine", () => {
 			stubAdapter({
 				title: "Weak Channel",
 				page: uploads(id, {
-					count: 5,
-					viewCount: 40_000, // below the 100k long threshold
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					count: 3,
+					viewCount: 40_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
@@ -445,14 +385,17 @@ describe("runSubmission — the ingest spine", () => {
 		const row = await submissionRow(admin, submissionId);
 		expect(row).toMatchObject({
 			status: "tracked",
-			outcome: { listings: 1, proven: 0 },
+			outcome: {
+				stage: "tracked",
+				feedVisibility: "hidden",
+				fetchedShorts: 3,
+				shortsAtOrAbove50k: 0,
+			},
 		});
 		expect(row?.failureReason).toBeNull();
-
-		expect(await listingTitles(t, "long")).not.toContain("Weak Channel");
 	});
 
-	it("tracks a proven channel pasted as a /channel/ URL", async () => {
+	it("tracks a visible channel pasted as a /channel/ URL", async () => {
 		const { t, admin } = await setup();
 		const id = ucId("urlchan");
 		const submissionId = await runOver(
@@ -461,10 +404,10 @@ describe("runSubmission — the ingest spine", () => {
 			stubAdapter({
 				title: "URL Channel",
 				page: uploads(id, {
-					count: 5,
+					count: 3,
 					viewCount: 150_000,
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
@@ -473,9 +416,8 @@ describe("runSubmission — the ingest spine", () => {
 		expect(row).toMatchObject({
 			status: "tracked",
 			resolvedYtChannelId: id,
-			outcome: { listings: 1, proven: 1 },
+			outcome: { stage: "breaking_out", feedVisibility: "visible" },
 		});
-		expect(await listingTitles(t, "long")).toContain("URL Channel");
 	});
 
 	it.each([
@@ -491,10 +433,10 @@ describe("runSubmission — the ingest spine", () => {
 				title: "Handle Channel",
 				resolveHandleTo: id, // the live lookup maps @mrbeast → this id
 				page: uploads(id, {
-					count: 5,
+					count: 3,
 					viewCount: 150_000,
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
@@ -503,9 +445,8 @@ describe("runSubmission — the ingest spine", () => {
 		expect(row).toMatchObject({
 			status: "tracked",
 			resolvedYtChannelId: id,
-			outcome: { listings: 1, proven: 1 },
+			outcome: { stage: "breaking_out", feedVisibility: "visible" },
 		});
-		expect(await listingTitles(t, "long")).toContain("Handle Channel");
 	});
 
 	it("fails a handle no channel owns with a resolve reason", async () => {
@@ -582,10 +523,10 @@ describe("runSubmission — the ingest spine", () => {
 		const { t, admin } = await setup();
 		const id = ucId("refresh");
 		const page = uploads(id, {
-			count: 5,
+			count: 3,
 			viewCount: 150_000,
-			ageDays: 60,
-			durationSec: LONG_SEC,
+			ageDays: 1,
+			durationSec: SHORT_SEC,
 		});
 
 		await runOver(t, id, stubAdapter({ title: "Refresh", page }));
@@ -599,51 +540,57 @@ describe("runSubmission — the ingest spine", () => {
 			channels: (await ctx.db.query("channels").collect()).length,
 			videos: (await ctx.db.query("videos").collect()).length,
 			listings: (await ctx.db.query("listings").collect()).length,
+			snapshots: (await ctx.db.query("videoSnapshots").collect()).length,
 		}));
-		expect(counts).toEqual({ channels: 1, videos: 5, listings: 1 });
+		expect(counts).toEqual({
+			channels: 1,
+			videos: 3,
+			listings: 0,
+			snapshots: 0,
+		});
 
 		const row = await submissionRow(admin, secondId);
-		expect(row?.status).toBe("tracked");
+		expect(row).toMatchObject({
+			status: "tracked",
+			outcome: { stage: "breaking_out", feedVisibility: "visible" },
+		});
 	});
 
 	it("re-submitting a tracked channel refreshes it — fresh data, no duplicate", async () => {
 		const { t, admin } = await setup();
 		const id = ucId("restale");
 
-		// First submission: the channel ingests but its uploads miss the Proven
-		// gate, so it's tracked with no Listing and absent from the Feed.
+		// First submission: the channel ingests but misses Feed lifecycle rules.
 		const firstId = await runOver(
 			t,
 			id,
 			stubAdapter({
 				title: "Refreshable",
 				page: uploads(id, {
-					count: 5,
-					viewCount: 40_000, // below the 100k long threshold
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					count: 3,
+					viewCount: 40_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
-		expect((await submissionRow(admin, firstId))?.outcome).toEqual({
-			listings: 1,
-			proven: 0,
+		expect((await submissionRow(admin, firstId))?.outcome).toMatchObject({
+			stage: "tracked",
+			feedVisibility: "hidden",
 		});
-		expect(await listingTitles(t, "long")).not.toContain("Refreshable");
 
-		// Re-submit the same channel, now proven. The shared write path patches in
-		// place by ytId, recording fresh snapshots and recomputing Listings — the
-		// channel now clears the gate and appears in the Feed.
+		// Re-submit the same channel with stronger current counts. The shared write
+		// path patches in place by YouTube id and the channel can re-enter the Feed.
 		const secondId = await runOver(
 			t,
 			id,
 			stubAdapter({
 				title: "Refreshable",
 				page: uploads(id, {
-					count: 5,
-					viewCount: 150_000, // now clears the long threshold
-					ageDays: 60,
-					durationSec: LONG_SEC,
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
 				}),
 			}),
 		);
@@ -651,33 +598,34 @@ describe("runSubmission — the ingest spine", () => {
 		expect(await submissionRow(admin, secondId)).toMatchObject({
 			status: "tracked",
 			resolvedYtChannelId: id,
-			outcome: { listings: 1, proven: 1 },
+			outcome: { stage: "breaking_out", feedVisibility: "visible" },
 		});
-		// Refreshed in place — one Channel, 5 videos, but two snapshots per video
-		// (one per run), proving fresh snapshots were recorded rather than replaced.
 		const counts = await t.run(async (ctx) => ({
 			channels: (await ctx.db.query("channels").collect()).length,
 			videos: (await ctx.db.query("videos").collect()).length,
+			currentViewCounts: (await ctx.db.query("videos").collect()).map(
+				(video) => video.currentViewCount,
+			),
 			listings: (await ctx.db.query("listings").collect()).length,
 			snapshots: (await ctx.db.query("videoSnapshots").collect()).length,
 		}));
 		expect(counts).toEqual({
 			channels: 1,
-			videos: 5,
-			listings: 1,
-			snapshots: 10,
+			videos: 3,
+			currentViewCounts: [150_000, 150_000, 150_000],
+			listings: 0,
+			snapshots: 0,
 		});
-		expect(await listingTitles(t, "long")).toContain("Refreshable");
 	});
 
 	it("moves a failed Submission forward when the worker is re-run", async () => {
 		const { t, admin } = await setup();
 		const id = ucId("retryok");
 		const page = uploads(id, {
-			count: 5,
+			count: 3,
 			viewCount: 150_000,
-			ageDays: 60,
-			durationSec: LONG_SEC,
+			ageDays: 1,
+			durationSec: SHORT_SEC,
 		});
 
 		// A transient API error fails the Submission on the first run.
@@ -697,8 +645,8 @@ describe("runSubmission — the ingest spine", () => {
 		);
 		expect((await submissionRow(admin, submissionId))?.status).toBe("failed");
 
-		// Re-running the worker over the same row (what retry schedules) with the
-		// API now healthy tracks it and derives the Listing — no re-paste needed.
+		// Re-running the worker over the same row with the API now healthy tracks
+		// it without requiring a re-paste.
 		await t.action((ctx) =>
 			runSubmission(ctx, stubAdapter({ title: "Retried", page }), submissionId),
 		);
@@ -706,10 +654,9 @@ describe("runSubmission — the ingest spine", () => {
 		const row = await submissionRow(admin, submissionId);
 		expect(row).toMatchObject({
 			status: "tracked",
-			outcome: { listings: 1, proven: 1 },
+			outcome: { stage: "breaking_out", feedVisibility: "visible" },
 		});
 		expect(row?.failureReason).toBeNull();
-		expect(await listingTitles(t, "long")).toContain("Retried");
 	});
 });
 
@@ -748,7 +695,14 @@ describe("retrySubmission — one-click retry of a failed Submission", () => {
 				submittedBy: "someone",
 				status: "tracked",
 				resolvedYtChannelId: ucId("tracked"),
-				outcome: { listings: 1, proven: 1 },
+				outcome: {
+					stage: "breaking_out",
+					feedVisibility: "visible",
+					fetchedShorts: 3,
+					recentShortsChecked: 3,
+					shortsAtOrAbove50k: 3,
+					shortsAtOrAbove100k: 3,
+				},
 			}),
 		);
 

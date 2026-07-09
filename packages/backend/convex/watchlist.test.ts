@@ -38,25 +38,16 @@ async function addVideo(
 	},
 ) {
 	const viewCount = opts.viewCount ?? 0;
-	const videoId = await ctx.db.insert("videos", {
+	return ctx.db.insert("videos", {
 		ytId: opts.title.toLowerCase().replace(/\s+/g, "_"),
 		channelId: opts.channelId,
 		title: opts.title,
 		thumbnailUrl: `https://img/${opts.title}.jpg`,
 		durationSec: opts.durationSec ?? 45,
-		form: (opts.durationSec ?? 45) <= 300 ? "short" : "long",
 		publishedAt: opts.publishedAt,
 		currentViewCount: opts.writeCurrentCount === false ? undefined : viewCount,
 		isStandard: opts.isStandard ?? true,
 	});
-	if (opts.writeCurrentCount === false && opts.viewCount !== undefined) {
-		await ctx.db.insert("videoSnapshots", {
-			videoId,
-			viewCount,
-			at: Date.now(),
-		});
-	}
-	return videoId;
 }
 
 async function addShorts(
@@ -272,7 +263,7 @@ describe("watchlist", () => {
 		});
 	});
 
-	it("detail's uploads strip is the last 12 standard Shorts, newest-first, with latest snapshot counts", async () => {
+	it("detail's uploads strip is the last 12 standard Shorts, newest-first, with current counts", async () => {
 		const { t, operator } = await setup();
 		const base = Date.UTC(2026, 0, 1);
 		const day = 24 * 60 * 60 * 1000;
@@ -280,25 +271,13 @@ describe("watchlist", () => {
 			const channelId = await addChannel(ctx, "Prolific");
 			// 14 standard shorts — only the newest 12 belong on the strip.
 			for (let i = 0; i < 14; i++) {
-				const videoId = await addVideo(ctx, {
+				await addVideo(ctx, {
 					channelId,
 					title: `Short ${i}`,
+					viewCount: i === 13 ? 250_000 : undefined,
 					publishedAt: base + i * day,
-					writeCurrentCount: false,
+					writeCurrentCount: i === 13,
 				});
-				// Two snapshots for the newest video: the strip shows the latest count.
-				if (i === 13) {
-					await ctx.db.insert("videoSnapshots", {
-						videoId,
-						viewCount: 100_000,
-						at: base + 14 * day,
-					});
-					await ctx.db.insert("videoSnapshots", {
-						videoId,
-						viewCount: 250_000,
-						at: base + 15 * day,
-					});
-				}
 			}
 			// Wrong form and non-standard items never reach the strip.
 			await addVideo(ctx, {
@@ -329,9 +308,9 @@ describe("watchlist", () => {
 			title: "Short 13",
 			thumbnailUrl: "https://img/Short 13.jpg",
 			publishedAt: base + 13 * day,
-			viewCount: 250_000, // the latest snapshot, not the first
+			viewCount: 250_000,
 		});
-		// No snapshot yet — the count is explicitly unmeasured, never zero.
+		// No current count yet — explicitly unmeasured, never zero or snapshot-backed.
 		expect(detail?.uploads[1]?.viewCount).toBeNull();
 	});
 

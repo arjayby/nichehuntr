@@ -8,7 +8,7 @@
  *
  * The Claude boundary is a humble adapter (`model/enrichment.ts`); `runEnrich` and
  * the mutations it calls are the tested seam, driven with a stub adapter so no
- * network is hit — mirroring the embed/Saturation pass. The cron `internalAction`
+ * network is hit. The cron `internalAction`
  * that wires the real adapter lives in `enrichCron.ts`: the Anthropic SDK needs the
  * Node.js runtime (`"use node"`), which can't share a file with queries/mutations.
  * Enrichment never gates (ADR-0003): a Channel with no signals yet still renders,
@@ -27,6 +27,7 @@ import {
 } from "./model/channelEnrichment";
 import {
 	deriveChannelLifecycle,
+	lifecycleVideoFromStoredVideo,
 	SHORT_MAX_SEC,
 } from "./model/channelLifecycle";
 import {
@@ -36,7 +37,6 @@ import {
 	type EnrichmentVideo,
 	type Signals,
 } from "./model/clonability";
-import { recomputeListingsForChannel } from "./model/listings";
 import { signalsValidator } from "./model/validators";
 
 /** How many Channels one enrich tick scores. Claude calls are the slow/costly
@@ -53,8 +53,7 @@ const ENRICH_VIDEO_SCAN = 200;
 /** Recent Shorts folded into the enrichment input (titles + thumbnails). */
 const ENRICH_VIDEO_WINDOW = 6;
 
-/** Enrichments written per mutation. Each touched channel re-derives its Listings
- * (a bounded video read), so the pass spreads across several small mutations. */
+/** Enrichments written per mutation. */
 const ENRICH_WRITE_BATCH = 10;
 
 /** Result of an enrich run, surfaced from the cron/orchestration for logs. */
@@ -95,27 +94,7 @@ export const listChannelsToEnrich = internalQuery({
 				.order("desc")
 				.take(ENRICH_VIDEO_SCAN);
 
-			const lifecycleVideos = await Promise.all(
-				recent.map(async (video) => {
-					if (video.currentViewCount !== undefined) {
-						return {
-							durationSec: video.durationSec,
-							publishedAt: video.publishedAt,
-							viewCount: video.currentViewCount,
-						};
-					}
-					const latestSnapshot = await ctx.db
-						.query("videoSnapshots")
-						.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
-						.order("desc")
-						.first();
-					return {
-						durationSec: video.durationSec,
-						publishedAt: video.publishedAt,
-						viewCount: latestSnapshot?.viewCount ?? 0,
-					};
-				}),
-			);
+			const lifecycleVideos = recent.map(lifecycleVideoFromStoredVideo);
 			const lifecycle = deriveChannelLifecycle({
 				subscriberCount: channel.subscriberCount ?? 0,
 				videos: lifecycleVideos,
@@ -165,9 +144,8 @@ export const listChannelsToEnrich = internalQuery({
 });
 
 /**
- * Persist a batch of freshly scored signals (upsert per Channel) and recompute
- * each touched channel's legacy Listings so old read models stay nullable/correct.
- * Feed and detail reads use the enrichment cache directly.
+ * Persist a batch of freshly scored signals, upserted per Channel. Feed and
+ * detail reads use this cache directly; enrichment never rewrites lifecycle data.
  */
 export const applyEnrichment = internalMutation({
 	args: {
@@ -179,12 +157,8 @@ export const applyEnrichment = internalMutation({
 			}),
 		),
 	},
-	handler: async (
-		ctx,
-		{ items },
-	): Promise<{ enriched: number; channelsRecomputed: number }> => {
+	handler: async (ctx, { items }): Promise<{ enriched: number }> => {
 		const now = Date.now();
-		const touched = new Set<Id<"channels">>();
 		for (const item of items) {
 			await upsertChannelEnrichment(ctx, {
 				channelId: item.channelId,
@@ -192,12 +166,8 @@ export const applyEnrichment = internalMutation({
 				fingerprint: item.fingerprint,
 				enrichedAt: now,
 			});
-			touched.add(item.channelId);
 		}
-		for (const channelId of touched) {
-			await recomputeListingsForChannel(ctx, channelId);
-		}
-		return { enriched: items.length, channelsRecomputed: touched.size };
+		return { enriched: items.length };
 	},
 });
 

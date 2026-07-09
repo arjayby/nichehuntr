@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-	chunk,
-	createYouTubeAdapter,
-	MAX_IDS_PER_REQUEST,
-	parseIso8601Duration,
-} from "./youtube";
+import { chunk, createYouTubeAdapter, parseIso8601Duration } from "./youtube";
 
 describe("parseIso8601Duration", () => {
 	it.each([
@@ -53,24 +48,6 @@ function recordingFetch(urls: string[]): typeof fetch {
 }
 
 describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
-	it("batches video-stats ids 50 at a time", async () => {
-		const urls: string[] = [];
-		const adapter = createYouTubeAdapter("KEY", recordingFetch(urls));
-		const ids = Array.from({ length: 101 }, (_, i) => `v${i}`);
-
-		const stats = await adapter.fetchVideoStats(ids);
-
-		expect(urls).toHaveLength(3); // 50 + 50 + 1
-		for (const u of urls) {
-			const idCount = new URL(u).searchParams.get("id")?.split(",").length ?? 0;
-			expect(idCount).toBeLessThanOrEqual(MAX_IDS_PER_REQUEST);
-			expect(new URL(u).searchParams.get("part")).toBe("statistics");
-			expect(u.includes("/search")).toBe(false);
-		}
-		expect(stats).toHaveLength(101);
-		expect(stats[0]).toEqual({ ytVideoId: "v0", viewCount: 100 });
-	});
-
 	it("batches channel ids 50 at a time", async () => {
 		const urls: string[] = [];
 		const adapter = createYouTubeAdapter("KEY", recordingFetch(urls));
@@ -89,7 +66,7 @@ describe("createYouTubeAdapter — quota contract (ADR-0001)", () => {
 		const failing = (async () =>
 			new Response("nope", { status: 403 })) as typeof fetch;
 		const adapter = createYouTubeAdapter("KEY", failing);
-		await expect(adapter.fetchVideoStats(["v0"])).rejects.toThrow(/403/);
+		await expect(adapter.fetchChannels(["c0"])).rejects.toThrow(/403/);
 	});
 });
 

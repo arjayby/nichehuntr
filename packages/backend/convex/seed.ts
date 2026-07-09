@@ -1,7 +1,6 @@
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./_generated/server";
-import { classifyForm } from "./model/deriveListings";
-import { recomputeListingsForChannel } from "./model/listings";
+import { deriveChannelLifecycle } from "./model/channelLifecycle";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,6 +16,7 @@ type SeedChannel = {
 	title: string;
 	handle: string;
 	description: string;
+	subscriberCount?: number;
 	videos: SeedVideo[];
 };
 
@@ -42,39 +42,44 @@ const SEED_CHANNELS: SeedChannel[] = [
 		ytId: "seed_ai_horror",
 		title: "AI Horror Shorts",
 		handle: "aihorrorshorts",
-		description: "Faceless AI-narrated horror shorts. Proven short-form.",
+		description: "Faceless AI-narrated horror shorts with strong recent reach.",
 		videos: uploads(42, views(720_000, 8)),
 	},
 	{
 		ytId: "seed_deep_finance",
 		title: "Deep Finance Breakdowns",
 		handle: "deepfinancebreakdowns",
-		description: "Long-form finance explainers. Proven long-form.",
+		description:
+			"Long-form finance explainers. Ignored by the short-form Feed.",
 		videos: uploads(840, views(185_000, 8)),
 	},
 	{
-		// Straddles both forms → two Listings (ADR-0002).
 		ytId: "seed_faceless_empire",
 		title: "Faceless Empire",
 		handle: "facelessempire",
-		description:
-			"Compilation shorts and long-form deep dives. Proven in both forms.",
+		description: "Compilation Shorts with enough reach to sit on the Feed.",
 		videos: [
 			...uploads(48, views(660_000, 5)),
 			...uploads(900, views(155_000, 5)),
 		],
 	},
 	{
-		// Median below the long threshold — one viral fluke can't carry it. Kept in
-		// the read model as a non-proven Listing, so it never reaches the Feed.
 		ytId: "seed_one_hit_wonder",
 		title: "One-Hit Wonder",
 		handle: "onehitwonder",
-		description: "One viral video, otherwise quiet. Fails the Proven gate.",
+		description: "One viral long-form video, otherwise quiet.",
 		videos: uploads(
 			900,
 			[42_000, 38_000, 45_000, 40_000, 3_200_000, 44_000, 39_000, 41_000],
 		),
+	},
+	{
+		ytId: "seed_mature_shorts",
+		title: "Mature Shorts Reference",
+		handle: "matureshorts",
+		description: "Established Shorts channel with mature audience and catalog.",
+		subscriberCount: 80_000,
+		videos: uploads(36, views(180_000, 50)),
 	},
 ];
 
@@ -100,21 +105,14 @@ async function clearSeedData(ctx: MutationCtx): Promise<void> {
 			}
 			await ctx.db.delete("videos", video._id);
 		}
-		const listings = await ctx.db
-			.query("listings")
-			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
-			.collect();
-		for (const listing of listings) {
-			await ctx.db.delete("listings", listing._id);
-		}
 		await ctx.db.delete("channels", channel._id);
 	}
 }
 
 /**
  * Dev-only seed: wipes previously seeded data and inserts a handful of channels
- * with videos + snapshots, then derives their Listings — so the whole path
- * (schema → deriveListings → feed → UI) is demoable without hitting YouTube.
+ * with current video counts, so the Channel lifecycle Feed is demoable without
+ * hitting YouTube.
  * Run manually with `npx convex run seed:seed`.
  */
 export const seed = internalMutation({
@@ -123,42 +121,46 @@ export const seed = internalMutation({
 		await clearSeedData(ctx);
 
 		const now = Date.now();
+		let visibleSeedChannels = 0;
 		for (const spec of SEED_CHANNELS) {
 			const channelId = await ctx.db.insert("channels", {
 				ytId: spec.ytId,
 				title: spec.title,
 				handle: spec.handle,
 				description: spec.description,
+				subscriberCount: spec.subscriberCount ?? 1_000,
 				discoveredAt: now,
 				source: "seed",
 			});
 
 			for (const [i, video] of spec.videos.entries()) {
-				const videoId = await ctx.db.insert("videos", {
+				await ctx.db.insert("videos", {
 					ytId: `${spec.ytId}_v${i}`,
 					channelId,
-					title: `${spec.title} — upload ${i + 1}`,
+					title: `${spec.title} - upload ${i + 1}`,
 					durationSec: video.durationSec,
-					form: classifyForm(video.durationSec),
 					publishedAt: now - video.ageDays * DAY_MS,
 					currentViewCount: video.viewCount,
 					isStandard: video.isStandard ?? true,
 				});
-				await ctx.db.insert("videoSnapshots", {
-					videoId,
-					viewCount: video.viewCount,
-					at: now,
-				});
 			}
-
-			await recomputeListingsForChannel(ctx, channelId);
+			const lifecycle = deriveChannelLifecycle({
+				subscriberCount: spec.subscriberCount ?? 1_000,
+				videos: spec.videos.map((video) => ({
+					durationSec: video.durationSec,
+					publishedAt: now - video.ageDays * DAY_MS,
+					viewCount: video.viewCount,
+				})),
+				now,
+			});
+			if (lifecycle.feedVisibility === "visible") {
+				visibleSeedChannels += 1;
+			}
 		}
 
-		const allListings = await ctx.db.query("listings").collect();
 		return {
 			channels: SEED_CHANNELS.length,
-			listings: allListings.length,
-			provenListings: allListings.filter((l) => l.proven).length,
+			visibleSeedChannels,
 		};
 	},
 });

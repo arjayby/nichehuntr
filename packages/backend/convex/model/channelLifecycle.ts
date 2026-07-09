@@ -15,6 +15,12 @@ export type ChannelLifecycleVideo = {
 	viewCount: number;
 };
 
+export type StoredLifecycleVideo = {
+	durationSec: number;
+	publishedAt: number;
+	currentViewCount?: number;
+};
+
 export type DeriveChannelLifecycleInput = {
 	subscriberCount: number;
 	videos: ChannelLifecycleVideo[];
@@ -47,6 +53,18 @@ export const ESTABLISHED_MIN_SUBSCRIBERS = 50_000;
 export const ESTABLISHED_MIN_SHORTS = 50;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Project a stored video row into the pure lifecycle input shape. Missing
+ * current counts are treated as zero reach for Feed visibility decisions. */
+export function lifecycleVideoFromStoredVideo(
+	video: StoredLifecycleVideo,
+): ChannelLifecycleVideo {
+	return {
+		durationSec: video.durationSec,
+		publishedAt: video.publishedAt,
+		viewCount: video.currentViewCount ?? 0,
+	};
+}
 
 function thresholdPasses(checkedCount: number, passingCount: number): boolean {
 	return (

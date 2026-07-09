@@ -3,9 +3,10 @@
  *
  * This is a "humble object": the only logic it holds is the mapping of YouTube's
  * wire format into our domain shapes plus quota discipline (batch 50 ids / unit,
- * never `search.list`). Everything worth testing — the Proven gate, upserts,
- * Listing derivation — lives behind it and is exercised with a stub adapter, so
- * this file is deliberately thin and is not richly tested against the network.
+ * never `search.list`). Everything worth testing — Channel lifecycle, upserts,
+ * and submission orchestration — lives behind it and is exercised with a stub
+ * adapter, so this file is deliberately thin and is not richly tested against
+ * the network.
  */
 
 import { SHORT_MAX_SEC } from "./channelLifecycle";
@@ -25,9 +26,6 @@ export type ChannelInfo = {
 	subscriberCount?: number;
 };
 
-/** A point-in-time view count for one video, feeding a `videoSnapshots` row. */
-export type VideoStat = { ytVideoId: string; viewCount: number };
-
 /**
  * One backfilled short-form upload — the shape the shared write path
  * (`upsertDiscovered`) ingests. Hydrated from `videos.list` so it carries
@@ -42,19 +40,18 @@ export type ChannelUpload = {
 	/** Upload time, ms since epoch. */
 	publishedAt: number;
 	viewCount: number;
-	/** False for live streams / premieres, which the Proven gate excludes. */
+	/** False for live streams / premieres, which lifecycle evidence excludes. */
 	isStandard: boolean;
 };
 
 /**
  * The seam the ingestion upkeep and the Submission worker depend on. Real
  * implementation talks to YouTube; tests pass a stub so no network is hit.
- * Automated discovery is gone (ADR-0005): this is channel metadata, the snapshot
- * stats refresh, and `fetchChannelUploads` — the Submission backfill of Shorts.
+ * Automated discovery is gone (ADR-0005): this is channel metadata and
+ * `fetchChannelUploads` — the Submission backfill of Shorts.
  */
 export type YouTubeAdapter = {
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
-	fetchVideoStats(videoIds: string[]): Promise<VideoStat[]>;
 	fetchChannelUploads(
 		channelId: string,
 		opts?: { limit?: number },
@@ -220,18 +217,6 @@ export function createYouTubeAdapter(
 			return body.items?.[0]?.id ?? null;
 		},
 
-		async fetchVideoStats(videoIds): Promise<VideoStat[]> {
-			const items = await getByIds<VideoResource>(
-				"videos",
-				"statistics",
-				videoIds,
-			);
-			return items.map((item) => ({
-				ytVideoId: item.id,
-				viewCount: toViewCount(item.statistics?.viewCount),
-			}));
-		},
-
 		async fetchChannelUploads(channelId, opts): Promise<ChannelUpload[]> {
 			// Every channel's uploads live in a playlist whose id is the channel id
 			// with the `UC` prefix swapped for `UU` — a documented YouTube invariant,
@@ -259,8 +244,8 @@ export function createYouTubeAdapter(
 					.map((item) => item.contentDetails?.videoId)
 					.filter((id): id is string => id !== undefined);
 				if (videoIds.length > 0) {
-					// One hydration batch pulls duration (→ Form), a fresh view count (→
-					// current reach + first Snapshot), and standardness for the whole page.
+					// One hydration batch pulls duration, a fresh view count, and
+					// standardness for the whole page.
 					const items = await getByIds<VideoResource>(
 						"videos",
 						"snippet,contentDetails,statistics",

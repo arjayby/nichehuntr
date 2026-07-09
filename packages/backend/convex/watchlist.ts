@@ -12,6 +12,7 @@ import {
 	type ChannelLifecycleStage,
 	deriveChannelLifecycle,
 	type LifecycleEvidence,
+	lifecycleVideoFromStoredVideo,
 	SHORT_MAX_SEC,
 } from "./model/channelLifecycle";
 import { computeClonability, type Signals } from "./model/clonability";
@@ -151,27 +152,7 @@ async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
 		.order("desc")
 		.take(MAX_CHANNEL_VIDEOS);
 
-	return Promise.all(
-		videos.map(async (video: Doc<"videos">) => {
-			if (video.currentViewCount !== undefined) {
-				return {
-					durationSec: video.durationSec,
-					publishedAt: video.publishedAt,
-					viewCount: video.currentViewCount,
-				};
-			}
-			const latestSnapshot = await ctx.db
-				.query("videoSnapshots")
-				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
-				.order("desc")
-				.first();
-			return {
-				durationSec: video.durationSec,
-				publishedAt: video.publishedAt,
-				viewCount: latestSnapshot?.viewCount ?? 0,
-			};
-		}),
-	);
+	return videos.map(lifecycleVideoFromStoredVideo);
 }
 
 /**
@@ -202,8 +183,8 @@ async function liveFeedStateFor(
 	};
 }
 
-/** The entry's recent-uploads strip: the channel's last `PROVEN_WINDOW`
- * standard Shorts, newest-first — each with its latest snapshot count. */
+/** The entry's recent-uploads strip: the channel's last standard Shorts,
+ * newest-first, with current raw view counts when available. */
 async function recentUploads(
 	ctx: QueryCtx,
 	channelId: Id<"channels">,
@@ -225,34 +206,14 @@ async function recentUploads(
 			matching.push(video);
 		}
 	}
-	// The snapshot lookups are independent — resolve them as one parallel batch.
-	return Promise.all(
-		matching.map(async (video) => {
-			if (video.currentViewCount !== undefined) {
-				return {
-					videoId: video._id,
-					ytId: video.ytId,
-					title: video.title,
-					thumbnailUrl: video.thumbnailUrl ?? null,
-					publishedAt: video.publishedAt,
-					viewCount: video.currentViewCount,
-				};
-			}
-			const latestSnapshot = await ctx.db
-				.query("videoSnapshots")
-				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
-				.order("desc")
-				.first();
-			return {
-				videoId: video._id,
-				ytId: video.ytId,
-				title: video.title,
-				thumbnailUrl: video.thumbnailUrl ?? null,
-				publishedAt: video.publishedAt,
-				viewCount: latestSnapshot?.viewCount ?? null,
-			};
-		}),
-	);
+	return matching.map((video) => ({
+		videoId: video._id,
+		ytId: video.ytId,
+		title: video.title,
+		thumbnailUrl: video.thumbnailUrl ?? null,
+		publishedAt: video.publishedAt,
+		viewCount: video.currentViewCount ?? null,
+	}));
 }
 
 export const detail = query({

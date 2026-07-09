@@ -1,12 +1,13 @@
 import { v } from "convex/values";
 
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { channelEnrichmentFor } from "./model/channelEnrichment";
 import {
 	type ChannelLifecycleStage,
 	deriveChannelLifecycle,
 	type LifecycleEvidence,
+	lifecycleVideoFromStoredVideo,
 } from "./model/channelLifecycle";
 import { computeClonability, type Signals } from "./model/clonability";
 import { stageValidator } from "./model/validators";
@@ -64,27 +65,7 @@ async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
 		.order("desc")
 		.take(MAX_CHANNEL_VIDEOS);
 
-	return Promise.all(
-		videos.map(async (video: Doc<"videos">) => {
-			if (video.currentViewCount !== undefined) {
-				return {
-					durationSec: video.durationSec,
-					publishedAt: video.publishedAt,
-					viewCount: video.currentViewCount,
-				};
-			}
-			const latestSnapshot = await ctx.db
-				.query("videoSnapshots")
-				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
-				.order("desc")
-				.first();
-			return {
-				durationSec: video.durationSec,
-				publishedAt: video.publishedAt,
-				viewCount: latestSnapshot?.viewCount ?? 0,
-			};
-		}),
-	);
+	return videos.map(lifecycleVideoFromStoredVideo);
 }
 
 /**

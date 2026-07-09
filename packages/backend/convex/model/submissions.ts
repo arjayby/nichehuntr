@@ -11,7 +11,7 @@
  * Submission.
  *
  * Keeping this pure — string in, discriminated union out, no network — makes it the
- * primary test seam, mirroring the pure `deriveListings` / `classifyForm` tests.
+ * primary test seam, mirroring the pure Channel lifecycle tests.
  */
 
 /**

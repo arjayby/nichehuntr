@@ -15,16 +15,17 @@ describe("seed", () => {
 		const t = createGatedTest();
 		const summary = await t.mutation(internal.seed.seed, {});
 
-		// AI Horror (short) + Deep Finance (long) + Faceless (short & long) = 4 proven.
-		// One-Hit Wonder's median is below the gate, so it produces a Listing but
-		// never a proven one.
-		expect(summary.provenListings).toBe(4);
+		expect(summary).toEqual({ channels: 5, visibleSeedChannels: 3 });
 
 		const asUser = await asSubscribedOperator(t);
 		const feedTitles = titles(await asUser.query(api.feed.feed, {}));
 
 		expect(feedTitles).toEqual(
-			expect.arrayContaining(["AI Horror Shorts", "Faceless Empire"]),
+			expect.arrayContaining([
+				"AI Horror Shorts",
+				"Faceless Empire",
+				"Mature Shorts Reference",
+			]),
 		);
 		expect(feedTitles).not.toContain("Deep Finance Breakdowns");
 		expect(feedTitles).not.toContain("One-Hit Wonder");
@@ -35,6 +36,6 @@ describe("seed", () => {
 		await t.mutation(internal.seed.seed, {});
 		const second = await t.mutation(internal.seed.seed, {});
 
-		expect(second.provenListings).toBe(4);
+		expect(second).toEqual({ channels: 5, visibleSeedChannels: 3 });
 	});
 });
