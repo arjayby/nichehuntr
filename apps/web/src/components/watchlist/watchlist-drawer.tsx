@@ -22,6 +22,7 @@ import { Button } from "@nichehuntr/ui/components/button";
 import { Input } from "@nichehuntr/ui/components/input";
 import { useMutation } from "convex/react";
 import {
+	AlertCircle,
 	Bookmark,
 	BookmarkX,
 	ChevronDown,
@@ -36,7 +37,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import { FormBadge, initials } from "@/components/feed/listing-card";
+import { initials } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import { cn } from "@/lib/utils";
 import {
@@ -58,15 +59,12 @@ function folderDroppableId(folderId: Id<"watchlistFolders">): string {
 	return `folder:${folderId}`;
 }
 
-/** Two entries share one identity when they point at the same (channel, form)
- * pair — the entry identity of ADR-0004. */
+/** Two entries share one identity when they point at the same Channel. */
 export function sameSelection(
 	a: WatchlistSelection | null,
 	b: WatchlistSelection | null,
 ): boolean {
-	return (
-		a !== null && b !== null && a.channelId === b.channelId && a.form === b.form
-	);
+	return a !== null && b !== null && a.channelId === b.channelId;
 }
 
 /** Total saved entries across the root and every Folder — the header count. */
@@ -272,9 +270,7 @@ function WatchlistRow({
 				<button
 					type="button"
 					aria-current={selected}
-					onClick={() =>
-						onSelect({ channelId: entry.channelId, form: entry.form })
-					}
+					onClick={() => onSelect({ channelId: entry.channelId })}
 					className="flex min-w-0 flex-1 items-center gap-3 px-1 py-2 text-left"
 				>
 					{entry.channel.avatarUrl ? (
@@ -292,11 +288,13 @@ function WatchlistRow({
 						{entry.channel.title}
 					</span>
 				</button>
-				{/* Form badge + remove share the trailing slot: at rest the badge sits
-				    at the end; on hover/focus the remove button expands in from the
-				    right and the badge slides left to make room (revealActionClass). */}
 				<div className="flex shrink-0 items-center gap-1">
-					<FormBadge form={entry.form} />
+					{entry.onFeed ? null : (
+						<span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+							<AlertCircle className="size-3" aria-hidden />
+							Off Feed
+						</span>
+					)}
 					<button
 						type="button"
 						onClick={() => onRemove(entry)}
@@ -529,7 +527,6 @@ function DragPreviewCard({ entry }: { entry: WatchlistEntry }) {
 			<span className="min-w-0 flex-1 truncate font-medium text-sm">
 				{entry.channel.title}
 			</span>
-			<FormBadge form={entry.form} />
 		</div>
 	);
 }

@@ -271,9 +271,7 @@ export function ListingCard({
 	onToggleSave: (card: FeedCard) => void;
 	onOpen: (selection: WatchlistSelection) => void;
 }) {
-	// The Feed is channel-based; existing detail/watchlist surfaces still use the
-	// Shorts selection for this card until their own channel-only migration.
-	const open = () => onOpen({ channelId: card.channelId, form: "short" });
+	const open = () => onOpen({ channelId: card.channelId });
 	return (
 		<Card
 			size="sm"

@@ -19,7 +19,6 @@ import type {
  * settle when the server's age-ordered result arrives.
  */
 
-type Form = WatchlistEntry["form"];
 type ChannelIdentity = WatchlistEntry["channel"];
 
 /**
@@ -40,7 +39,7 @@ function sortFolders(folders: WatchlistFolderGroup[]): WatchlistFolderGroup[] {
 }
 
 /**
- * Toggle a `(channel, form)` pair: remove it if it's already saved anywhere
+ * Toggle a Channel: remove it if it's already saved anywhere
  * (root or a folder), else prepend a synthesized root entry (newest-first).
  * Returns the list unchanged when adding without a `channel` identity to build
  * the row from — the add then falls back to the reactive round-trip.
@@ -48,11 +47,9 @@ function sortFolders(folders: WatchlistFolderGroup[]): WatchlistFolderGroup[] {
 export function toggleEntryOptimistic(
 	list: WatchlistList,
 	channelId: Id<"channels">,
-	form: Form,
 	channel: ChannelIdentity | null,
 ): WatchlistList {
-	const matches = (entry: WatchlistEntry) =>
-		entry.channelId === channelId && entry.form === form;
+	const matches = (entry: WatchlistEntry) => entry.channelId === channelId;
 	const present =
 		list.root.some(matches) ||
 		list.folders.some((folder) => folder.entries.some(matches));
@@ -75,8 +72,7 @@ export function toggleEntryOptimistic(
 	const entry: WatchlistEntry = {
 		entryId: tempId() as unknown as Id<"watchlistEntries">,
 		channelId,
-		form,
-		// Saved from a live Feed card / detail — the pair is on the Feed by
+		// Saved from a live Feed card / detail — the Channel is on the Feed by
 		// definition, so the row renders un-muted straight away.
 		onFeed: true,
 		folderId: null,

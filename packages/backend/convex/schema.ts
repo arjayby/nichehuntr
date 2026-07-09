@@ -104,26 +104,21 @@ export default defineSchema({
 		enrichedAt: v.number(),
 	}).index("by_channel_and_form", ["channelId", "form"]),
 
-	// The Operator's private Watchlist: one row per (Operator, Channel, Form)
-	// triple (ADR-0004). Never a listing id — Listings are deleted/reinserted on
-	// recompute (ADR-0002), so entries re-derive live Listing data at read time.
+	// The Operator's private Watchlist: one row per (Operator, Channel) pair
+	// (CONTEXT.md). Never a listing id and never copied channel data — entries
+	// re-derive live Feed state at read time so they survive lifecycle recomputes.
 	// `operatorId` is the better-auth user id. Newest-first uses `_creationTime`.
 	// `folderId` files the entry into one of the Operator's Folders (CONTEXT.md);
 	// absent means the entry sits at the Watchlist root.
 	watchlistEntries: defineTable({
 		operatorId: v.string(),
 		channelId: v.id("channels"),
-		form: formValidator,
 		folderId: v.optional(v.id("watchlistFolders")),
 	})
-		// Point lookup for toggle/dedupe on the exact triple; its `operatorId`
+		// Point lookup for toggle/dedupe on the exact pair; its `operatorId`
 		// prefix also serves the per-operator list (ordered by the remaining
 		// columns, so the list query uses `by_operator` below instead).
-		.index("by_operator_and_channel_and_form", [
-			"operatorId",
-			"channelId",
-			"form",
-		])
+		.index("by_operator_and_channel", ["operatorId", "channelId"])
 		.index("by_operator", ["operatorId"])
 		// Serves delete-a-Folder reparenting: find every entry filed under it.
 		.index("by_folder", ["folderId"]),

@@ -7,9 +7,13 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
-import type { Signals } from "./model/clonability";
-import { type Form, PROVEN_WINDOW, type Stage } from "./model/deriveListings";
-import { formValidator } from "./model/validators";
+import {
+	type ChannelLifecycleStage,
+	deriveChannelLifecycle,
+	type LifecycleEvidence,
+	SHORT_MAX_SEC,
+} from "./model/channelLifecycle";
+import { computeClonability, type Signals } from "./model/clonability";
 import { requireActiveSubscription } from "./polar";
 
 /** Safety cap on entries read per request; pagination is deferred like the Feed's. */
@@ -21,21 +25,27 @@ const MAX_WATCHLIST_FOLDERS = 200;
 /** Folder names are a short curation label, not free text; trimmed and bounded. */
 const MAX_FOLDER_NAME_LENGTH = 60;
 
-/** Safety cap on how many of a channel's videos the uploads strip scans while
- * looking for its form's last `PROVEN_WINDOW` standard uploads. */
-const MAX_UPLOADS_SCAN = 10 * PROVEN_WINDOW;
+/** Recent short-form uploads shown in the detail pane. */
+const RECENT_UPLOADS_LIMIT = 12;
+
+/** Safety cap on videos scanned while finding recent standard Shorts. */
+const MAX_UPLOADS_SCAN = 10 * RECENT_UPLOADS_LIMIT;
+
+/** Safety cap on channel videos scanned while deriving lifecycle evidence. */
+const MAX_CHANNEL_VIDEOS = 200;
+
+type FeedStage = Exclude<ChannelLifecycleStage, "tracked">;
 
 /**
- * One Watchlist row: the saved `(channel, form)` plus the channel identity the
- * drawer renders. A lens on the Feed (CONTEXT.md) — channel data is re-derived
- * at read time, never copied into the entry (ADR-0004).
+ * One Watchlist row: the saved Channel plus the channel identity the drawer
+ * renders. A lens on the Feed (CONTEXT.md) — channel data is re-derived at read
+ * time, never copied into the entry.
  */
 export type WatchlistEntry = {
 	entryId: Id<"watchlistEntries">;
 	channelId: Id<"channels">;
-	form: Form;
-	/** Whether the pair still has a proven Listing — false renders the row
-	 * muted ("no longer on the Feed"), never hides it (ADR-0004). */
+	/** Whether the Channel is currently visible on the Feed — false renders the
+	 * row muted ("no longer on the Feed"), never hides it. */
 	onFeed: boolean;
 	/** The Folder the entry is filed under, or null when it sits at the root. */
 	folderId: Id<"watchlistFolders"> | null;
@@ -48,59 +58,51 @@ export type WatchlistEntry = {
 };
 
 /**
- * Save or unsave a `(channel, form)` for the calling Operator. Deduped on the
- * exact (Operator, Channel, Form) triple (ADR-0004): toggling an existing
- * entry removes it, so saving the same card twice is impossible.
+ * Save or unsave a Channel for the calling Operator. Deduped on the exact
+ * (Operator, Channel) pair: toggling an existing entry removes it, so saving
+ * the same Channel twice is impossible.
  */
 export const toggle = mutation({
 	args: {
 		channelId: v.id("channels"),
-		form: formValidator,
 	},
 	handler: async (ctx, args): Promise<{ saved: boolean }> => {
 		const operator = await requireActiveSubscription(ctx);
 
 		const existing = await ctx.db
 			.query("watchlistEntries")
-			.withIndex("by_operator_and_channel_and_form", (q) =>
-				q
-					.eq("operatorId", operator._id)
-					.eq("channelId", args.channelId)
-					.eq("form", args.form),
+			.withIndex("by_operator_and_channel", (q) =>
+				q.eq("operatorId", operator._id).eq("channelId", args.channelId),
 			)
-			.unique();
+			.take(MAX_WATCHLIST_ENTRIES);
 
-		if (existing !== null) {
-			await ctx.db.delete("watchlistEntries", existing._id);
+		if (existing.length > 0) {
+			await Promise.all(
+				existing.map((entry) => ctx.db.delete("watchlistEntries", entry._id)),
+			);
 			return { saved: false };
 		}
 
 		await ctx.db.insert("watchlistEntries", {
 			operatorId: operator._id,
 			channelId: args.channelId,
-			form: args.form,
 		});
 		return { saved: true };
 	},
 });
 
-/** An entry's identity as the client passes it around: the `(channel, form)`
- * pair (ADR-0004) — the `detail` query's args and the drawer's selection key. */
+/** An entry's identity as the client passes it around: the Channel id. */
 export type WatchlistSelection = {
 	channelId: Id<"channels">;
-	form: Form;
 };
 
 /**
- * The deep detail for one Watchlist entry. The Listing is re-derived live by
- * `(channelId, form)` at read time (ADR-0004): `listing` carries the full
- * scores while the pair is on the Feed, and is `null` when the Listing is gone
- * or unproven — the explicit "no longer on the Feed" state, which is a product
- * state, not an error.
+ * The deep detail for one Watchlist entry. Feed state is re-derived live by
+ * Channel at read time: `feed` carries the current lifecycle evidence while the
+ * Channel is on the Feed, and is `null` when the Channel is Tracked/hidden.
  */
 export type WatchlistDetail = {
 	channelId: Id<"channels">;
-	form: Form;
 	channel: {
 		ytId: string;
 		title: string;
@@ -108,11 +110,9 @@ export type WatchlistDetail = {
 		avatarUrl: string | null;
 		description: string | null;
 	};
-	listing: {
-		stage: Stage;
-		medianViews: number;
-		momentum: number | null;
-		saturation: number | null;
+	feed: {
+		stage: FeedStage;
+		evidence: LifecycleEvidence;
 		clonability: number | null;
 		signals: Signals | null;
 	} | null;
@@ -141,31 +141,80 @@ function channelIdentity(channel: Doc<"channels">) {
 	};
 }
 
+async function videosForLifecycle(ctx: QueryCtx, channelId: Id<"channels">) {
+	const videos = await ctx.db
+		.query("videos")
+		.withIndex("by_channel_and_publishedAt", (q) =>
+			q.eq("channelId", channelId),
+		)
+		.order("desc")
+		.take(MAX_CHANNEL_VIDEOS);
+
+	return Promise.all(
+		videos.map(async (video: Doc<"videos">) => {
+			if (video.currentViewCount !== undefined) {
+				return {
+					durationSec: video.durationSec,
+					publishedAt: video.publishedAt,
+					viewCount: video.currentViewCount,
+				};
+			}
+			const latestSnapshot = await ctx.db
+				.query("videoSnapshots")
+				.withIndex("by_video_and_at", (q) => q.eq("videoId", video._id))
+				.order("desc")
+				.first();
+			return {
+				durationSec: video.durationSec,
+				publishedAt: video.publishedAt,
+				viewCount: latestSnapshot?.viewCount ?? 0,
+			};
+		}),
+	);
+}
+
+async function shortEnrichmentFor(ctx: QueryCtx, channelId: Id<"channels">) {
+	return ctx.db
+		.query("enrichments")
+		.withIndex("by_channel_and_form", (q) =>
+			q.eq("channelId", channelId).eq("form", "short"),
+		)
+		.unique();
+}
+
 /**
- * The live-join half of ADR-0004: the pair's current *proven* Listing, or null
- * when it's off the Feed (row gone after a recompute, or present but
- * unproven). Null is a product state — "no longer on the Feed" — not an error.
+ * The Channel's current Feed state, or null when it is Tracked/hidden. Null is a
+ * product state — "no longer on the Feed" — not an error.
  */
-async function liveListingFor(
+async function liveFeedStateFor(
 	ctx: QueryCtx,
-	channelId: Id<"channels">,
-	form: Form,
-) {
-	const listings = await ctx.db
-		.query("listings")
-		.withIndex("by_channel", (q) => q.eq("channelId", channelId))
-		.take(2); // at most one Listing per (channel, form) (ADR-0002)
-	const listing = listings.find((row) => row.form === form) ?? null;
-	return listing?.proven ? listing : null;
+	channel: Doc<"channels">,
+): Promise<WatchlistDetail["feed"]> {
+	const [videos, enrichment] = await Promise.all([
+		videosForLifecycle(ctx, channel._id),
+		shortEnrichmentFor(ctx, channel._id),
+	]);
+	const lifecycle = deriveChannelLifecycle({
+		subscriberCount: channel.subscriberCount ?? 0,
+		videos,
+		now: Date.now(),
+	});
+	if (lifecycle.feedVisibility === "hidden" || lifecycle.stage === "tracked") {
+		return null;
+	}
+	return {
+		stage: lifecycle.stage,
+		evidence: lifecycle.evidence,
+		clonability: computeClonability(enrichment?.signals ?? null, "short"),
+		signals: enrichment?.signals ?? null,
+	};
 }
 
 /** The entry's recent-uploads strip: the channel's last `PROVEN_WINDOW`
- * standard videos of the entry's form, newest-first — the same window the
- * Proven gate judges (CONTEXT.md) — each with its latest snapshot count. */
+ * standard Shorts, newest-first — each with its latest snapshot count. */
 async function recentUploads(
 	ctx: QueryCtx,
 	channelId: Id<"channels">,
-	form: Form,
 ): Promise<WatchlistUpload[]> {
 	const matching: Doc<"videos">[] = [];
 	let scanned = 0;
@@ -177,10 +226,10 @@ async function recentUploads(
 		.order("desc");
 	for await (const video of newestFirst) {
 		scanned += 1;
-		if (matching.length >= PROVEN_WINDOW || scanned > MAX_UPLOADS_SCAN) {
+		if (matching.length >= RECENT_UPLOADS_LIMIT || scanned > MAX_UPLOADS_SCAN) {
 			break;
 		}
-		if (video.isStandard && video.form === form) {
+		if (video.isStandard && video.durationSec <= SHORT_MAX_SEC) {
 			matching.push(video);
 		}
 	}
@@ -217,7 +266,6 @@ async function recentUploads(
 export const detail = query({
 	args: {
 		channelId: v.id("channels"),
-		form: formValidator,
 	},
 	handler: async (ctx, args): Promise<WatchlistDetail | null> => {
 		await requireActiveSubscription(ctx);
@@ -227,31 +275,20 @@ export const detail = query({
 			return null; // channel deleted from under the entry — nothing to show
 		}
 
-		// The Listing join and the uploads strip read disjoint tables.
-		const [listing, uploads] = await Promise.all([
-			liveListingFor(ctx, args.channelId, args.form),
-			recentUploads(ctx, args.channelId, args.form),
+		// Feed state and the uploads strip read disjoint tables.
+		const [feed, uploads] = await Promise.all([
+			liveFeedStateFor(ctx, channel),
+			recentUploads(ctx, args.channelId),
 		]);
 
 		return {
 			channelId: args.channelId,
-			form: args.form,
 			channel: {
 				...channelIdentity(channel),
 				description: channel.description ?? null,
 			},
 			uploads,
-			listing:
-				listing !== null
-					? {
-							stage: listing.stage,
-							medianViews: listing.medianViews,
-							momentum: listing.momentum,
-							saturation: listing.saturation,
-							clonability: listing.clonability,
-							signals: listing.signals,
-						}
-					: null,
+			feed,
 		};
 	},
 });
@@ -262,18 +299,15 @@ async function buildEntry(
 	ctx: QueryCtx,
 	row: Doc<"watchlistEntries">,
 ): Promise<WatchlistEntry | null> {
-	const [channel, listing] = await Promise.all([
-		ctx.db.get("channels", row.channelId),
-		liveListingFor(ctx, row.channelId, row.form),
-	]);
+	const channel = await ctx.db.get("channels", row.channelId);
 	if (channel === null) {
 		return null; // channel deleted from under the entry — skip defensively
 	}
+	const feed = await liveFeedStateFor(ctx, channel);
 	return {
 		entryId: row._id,
 		channelId: row.channelId,
-		form: row.form,
-		onFeed: listing !== null,
+		onFeed: feed !== null,
 		folderId: row.folderId ?? null,
 		channel: channelIdentity(channel),
 	};
@@ -290,8 +324,8 @@ export type WatchlistFolderGroup = {
  * The calling Operator's whole Watchlist, grouped for the drawer: Folders
  * (alphabetical, each with its entries) plus the `root` entries filed under no
  * Folder. Entries are newest-first everywhere. Always the whole list regardless
- * of the Feed's form lens; the flattened (channelId, form) pairs double as the
- * saved-state keys the Feed paints on cards.
+ * of any Feed filtering; the flattened channel ids double as the saved-state
+ * keys the Feed paints on cards.
  */
 export type WatchlistList = {
 	folders: WatchlistFolderGroup[];
@@ -315,10 +349,20 @@ export const list = query({
 				.take(MAX_WATCHLIST_ENTRIES),
 		]);
 
-		// Entry rows are independent, so their channel + listing reads run as one
-		// batch; the result keeps the newest-first order of `entryRows`.
+		const seenChannels = new Set<Id<"channels">>();
+		const uniqueEntryRows: Doc<"watchlistEntries">[] = [];
+		for (const row of entryRows) {
+			if (seenChannels.has(row.channelId)) {
+				continue;
+			}
+			seenChannels.add(row.channelId);
+			uniqueEntryRows.push(row);
+		}
+
+		// Entry rows are independent, so their channel + Feed-state reads run as
+		// one batch; the result keeps the newest-first order of `entryRows`.
 		const built = (
-			await Promise.all(entryRows.map((row) => buildEntry(ctx, row)))
+			await Promise.all(uniqueEntryRows.map((row) => buildEntry(ctx, row)))
 		).filter((entry) => entry !== null);
 
 		// Folders group, they don't rank — sort by name (case-insensitive).
