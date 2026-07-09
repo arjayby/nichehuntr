@@ -13,8 +13,8 @@
  * `submissionWorker` internalAction wires the live adapter from env.
  *
  * `pending → processing → tracked | failed`. A channel that ingests but misses
- * the Proven gate is `tracked` with a 0-proven summary, never `failed`; `failed`
- * is reserved for an unresolvable paste or an API error (CONTEXT.md: Submission).
+ * the lifecycle rules is still `tracked`, never `failed`; `failed` is reserved
+ * for an unresolvable paste or an API error (CONTEXT.md: Submission).
  */
 
 import { ConvexError, v } from "convex/values";
@@ -30,13 +30,16 @@ import {
 } from "./_generated/server";
 import { requireAdmin } from "./admin";
 import { liveYouTubeAdapter } from "./ingest";
+import {
+	deriveChannelLifecycle,
+	lifecycleVideoFromStoredVideo,
+} from "./model/channelLifecycle";
 import { resolveChannelRef } from "./model/submissions";
 import type { SubmissionOutcome, SubmissionStatus } from "./model/validators";
 import type { YouTubeAdapter } from "./model/youtube";
 
-/** Uploads a single Submission backfills — the latest page of the channel's
- * uploads (one `playlistItems` page + one hydration batch, ~2 quota units). Deep
- * enough to fill the Proven window in the dominant form. Tunable (ADR-0005). */
+/** Uploads a single Submission backfills: up to the latest 50 Shorts, giving the
+ * lifecycle enough current short-form data to classify Established channels. */
 const SUBMISSION_UPLOAD_LIMIT = 50;
 
 /** Submissions returned to the live admin table, newest-first. Tunable. */
@@ -158,10 +161,9 @@ export const beginSubmission = internalMutation({
 });
 
 /**
- * Finish a Submission as `tracked`: read back the Listings the just-ingested
- * channel produced, summarize how many cleared the Proven gate, and stamp the
- * resolved id / channel / outcome. Not reaching Proven still lands here (with a
- * 0-proven summary) — the channel is tracked and may become Proven later.
+ * Finish a Submission as `tracked`: derive the current short-form Channel
+ * lifecycle evidence and stamp the resolved id / channel / outcome. Missing a
+ * visible lifecycle stage still lands here — the channel remains tracked.
  */
 export const completeSubmission = internalMutation({
 	args: {
@@ -182,16 +184,30 @@ export const completeSubmission = internalMutation({
 			});
 			return null;
 		}
-		const listings = await ctx.db
-			.query("listings")
-			.withIndex("by_channel", (q) => q.eq("channelId", channel._id))
-			.collect();
-		const proven = listings.filter((listing) => listing.proven).length;
+		const videos = await ctx.db
+			.query("videos")
+			.withIndex("by_channel_and_publishedAt", (q) =>
+				q.eq("channelId", channel._id),
+			)
+			.order("desc")
+			.take(SUBMISSION_UPLOAD_LIMIT);
+		const lifecycle = deriveChannelLifecycle({
+			subscriberCount: channel.subscriberCount ?? 0,
+			videos: videos.map(lifecycleVideoFromStoredVideo),
+			now: Date.now(),
+		});
 		await ctx.db.patch("submissions", submissionId, {
 			status: "tracked",
 			resolvedYtChannelId: ytChannelId,
 			channelId: channel._id,
-			outcome: { listings: listings.length, proven },
+			outcome: {
+				stage: lifecycle.stage,
+				feedVisibility: lifecycle.feedVisibility,
+				fetchedShorts: lifecycle.evidence.fetchedShorts,
+				recentShortsChecked: lifecycle.evidence.recentShortsChecked,
+				shortsAtOrAbove50k: lifecycle.evidence.shortsAtOrAbove50k,
+				shortsAtOrAbove100k: lifecycle.evidence.shortsAtOrAbove100k,
+			},
 			failureReason: undefined,
 		});
 		return null;
@@ -216,7 +232,7 @@ export const failSubmission = internalMutation({
 /**
  * Backfill one Submission end-to-end: resolve its paste → fetch channel metadata
  * + recent uploads → upsert them through the shared write path (stamping
- * `source: "admin"`) → summarize the Proven outcome onto the row. An unresolvable
+ * `source: "admin"`) → summarize the Channel lifecycle outcome. An unresolvable
  * paste or a missing channel `fail`s with a clear reason; an adapter throw (API
  * error) `fail`s too — everything that actually ingested is `tracked`. Idempotent
  * per channel: re-running refreshes rather than duplicates.

@@ -1,11 +1,5 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
 import { topSignals } from "@nichehuntr/backend/convex/model/clonability";
-import type { Form } from "@nichehuntr/backend/convex/model/deriveListings";
-import {
-	MOMENTUM_MODEST,
-	MOMENTUM_STRONG,
-	saturationLevel,
-} from "@nichehuntr/backend/convex/model/deriveListings";
 import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
 import {
 	Card,
@@ -13,15 +7,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
-import {
-	Bookmark,
-	CalendarClock,
-	ExternalLink,
-	Minus,
-	TrendingUp,
-	Users,
-	Video,
-} from "lucide-react";
+import { Bookmark, CalendarClock, ExternalLink, Video } from "lucide-react";
 
 /** Compact view-count formatter shared by Feed cards and the detail pane. */
 export const compactViews = new Intl.NumberFormat("en", {
@@ -36,106 +22,11 @@ export const STAGE_LABELS: Record<FeedCard["stage"], string> = {
 	established: "Established",
 };
 
-const momentumPct = new Intl.NumberFormat("en", {
-	style: "percent",
-	maximumFractionDigits: 0,
-});
-
 const publishDate = new Intl.DateTimeFormat("en", {
 	month: "short",
 	day: "numeric",
 	year: "numeric",
 });
-
-/**
- * A compact Momentum badge: the listing's recent daily growth relative to its
- * baseline reach — the same signal that places it in a column. Strong momentum
- * (Breaking Out territory) reads as a filled brand pill; a still-accelerating
- * listing as plain foreground; a flat/cooled one as a muted dash.
- */
-export function MomentumIndicator({ momentum }: { momentum: number | null }) {
-	if (momentum === null) {
-		return (
-			<span className="text-muted-foreground text-xs" title="Momentum pending">
-				—
-			</span>
-		);
-	}
-	const label = `${momentumPct.format(momentum)}/d`;
-	const title = "Recent daily growth vs. baseline reach";
-	if (momentum >= MOMENTUM_STRONG) {
-		return (
-			<span
-				className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 font-medium text-primary-foreground text-xs tabular-nums"
-				title={title}
-			>
-				<TrendingUp className="size-3" />
-				{label}
-			</span>
-		);
-	}
-	const accelerating = momentum >= MOMENTUM_MODEST;
-	return (
-		<span
-			className={`inline-flex items-center gap-1 font-medium text-xs tabular-nums ${
-				accelerating ? "text-foreground" : "text-muted-foreground"
-			}`}
-			title={title}
-		>
-			{accelerating ? (
-				<TrendingUp className="size-3.5" />
-			) : (
-				<Minus className="size-3.5" />
-			)}
-			{label}
-		</span>
-	);
-}
-
-/**
- * The niche's crowdedness: how many similar channels already exist (CONTEXT.md:
- * Saturation). A crowded niche is the signal it's too late to clone — so the
- * high band reads as a caution — while a sparse one is neutral. Null until the
- * embed cron measures it.
- */
-export function SaturationRead({ saturation }: { saturation: number | null }) {
-	if (saturation === null) {
-		return (
-			<div className="text-center">
-				<div className="text-muted-foreground text-xs">Niche</div>
-				<div
-					className="text-muted-foreground text-sm"
-					title="Saturation pending"
-				>
-					—
-				</div>
-			</div>
-		);
-	}
-	const level = saturationLevel(saturation);
-	const tone =
-		level === "high"
-			? "text-destructive"
-			: level === "medium"
-				? "text-foreground"
-				: "text-muted-foreground";
-	const title =
-		level === "high"
-			? `${saturation} similar channels — crowded niche, likely too late to clone`
-			: `${saturation} similar channels in this niche`;
-	return (
-		<div className="text-center">
-			<div className="text-muted-foreground text-xs">Niche</div>
-			<div
-				className={`inline-flex items-center gap-1 font-medium text-sm tabular-nums ${tone}`}
-				title={title}
-			>
-				<Users className="size-3.5" />
-				{saturation}
-			</div>
-		</div>
-	);
-}
 
 /**
  * Clonability score: the tunable weighted mean of the Channel's signals (CONTEXT.md).
@@ -191,15 +82,6 @@ function SignalScores({ card }: { card: FeedCard }) {
 				</div>
 			))}
 		</div>
-	);
-}
-
-/** The form badge shared by Watchlist rows and the detail pane. */
-export function FormBadge({ form }: { form: Form }) {
-	return (
-		<span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground text-xs uppercase">
-			{form}
-		</span>
 	);
 }
 
@@ -260,7 +142,7 @@ export function channelUrl(channel: FeedCard["channel"]): string {
 		: `https://www.youtube.com/channel/${channel.ytId}`;
 }
 
-export function ListingCard({
+export function ChannelCard({
 	card,
 	saved,
 	onToggleSave,

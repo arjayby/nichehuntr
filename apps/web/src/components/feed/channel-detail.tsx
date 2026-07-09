@@ -27,7 +27,7 @@ import {
 	compactViews,
 	initials,
 	STAGE_LABELS,
-} from "@/components/feed/listing-card";
+} from "@/components/feed/channel-card";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -263,10 +263,9 @@ function DetailHeaderSkeleton() {
 	);
 }
 
-/** The scored half of the detail — everything below the identity header — while
- * `watchlist.detail` is still in flight. Mirrors the resolved layout (stage +
- * momentum, the medians/saturation/clonability row, signals, uploads strip) so
- * the swap-in doesn't reflow. */
+/** The scored half of the detail while `watchlist.detail` is still in flight.
+ * Mirrors the resolved lifecycle evidence, signals, and uploads strip so the
+ * swap-in doesn't reflow. */
 function DetailBodySkeleton() {
 	return (
 		<>

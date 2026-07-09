@@ -10,7 +10,6 @@ import type {
 	EnrichmentInput,
 	Signals,
 } from "./model/clonability";
-import { recomputeListingsForChannel } from "./model/listings";
 
 const DAY = 24 * 60 * 60 * 1000;
 const SHORT_SEC = 45;
@@ -59,7 +58,6 @@ async function addChannel(
 		});
 	}
 
-	await recomputeListingsForChannel(ctx, channelId);
 	return channelId;
 }
 
@@ -74,21 +72,15 @@ async function addVideo(
 		publishedAt: number;
 	},
 ) {
-	const videoId = await ctx.db.insert("videos", {
+	await ctx.db.insert("videos", {
 		ytId: opts.ytId,
 		channelId: opts.channelId,
 		title: opts.title,
 		thumbnailUrl: `https://img.example/${opts.ytId}.jpg`,
 		durationSec: opts.durationSec,
-		form: opts.durationSec <= 300 ? "short" : "long",
 		publishedAt: opts.publishedAt,
 		currentViewCount: opts.viewCount,
 		isStandard: true,
-	});
-	await ctx.db.insert("videoSnapshots", {
-		videoId,
-		viewCount: opts.viewCount,
-		at: Date.now(),
 	});
 }
 
@@ -199,7 +191,7 @@ describe("runEnrich — channel-level short-form scoring", () => {
 
 	it("caches by channel and re-runs only when short-form inputs materially change", async () => {
 		const { t } = await setup();
-		const channelId = await t.run((ctx) =>
+		await t.run((ctx) =>
 			addChannel(ctx, {
 				ytId: "cache",
 				title: "Cache Me",
@@ -222,7 +214,6 @@ describe("runEnrich — channel-level short-form scoring", () => {
 			if (long !== null) {
 				await ctx.db.patch(long._id, { title: "Long retitle ignored" });
 			}
-			await recomputeListingsForChannel(ctx, channelId);
 		});
 		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(0);
 		expect(calls).toHaveLength(1);
@@ -235,7 +226,6 @@ describe("runEnrich — channel-level short-form scoring", () => {
 			if (short !== null) {
 				await ctx.db.patch(short._id, { title: "Cache Me retitled" });
 			}
-			await recomputeListingsForChannel(ctx, channelId);
 		});
 		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
 		expect(calls).toHaveLength(2);
@@ -279,7 +269,7 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		expect(rows[0]?.signals.automatable?.score).toBe(80);
 	});
 
-	it("reuses channel enrichment across lifecycle/listing recomputes", async () => {
+	it("reuses channel enrichment across lifecycle reads", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) =>
 			addChannel(ctx, { ytId: "keep", title: "Keep Me" }),
@@ -291,8 +281,6 @@ describe("runEnrich — channel-level short-form scoring", () => {
 			(await operator.query(api.feed.feed, {})).flatMap((g) => g.cards)[0]
 				?.clonability,
 		).toBe(60);
-
-		await t.run((ctx) => recomputeListingsForChannel(ctx, channelId));
 
 		const card = (await operator.query(api.feed.feed, {}))
 			.flatMap((g) => g.cards)

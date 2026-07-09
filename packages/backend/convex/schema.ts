@@ -1,7 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-import { EMBEDDING_DIMENSIONS } from "./model/embeddings";
 import {
 	formValidator,
 	signalsValidator,
@@ -12,8 +11,7 @@ import {
 } from "./model/validators";
 
 export default defineSchema({
-	// The underlying YouTube entities we discover and track. Not the scored unit
-	// — see `listings` (ADR-0002).
+	// The short-form YouTube Channels we track and score directly (ADR-0006).
 	channels: defineTable({
 		ytId: v.string(),
 		title: v.string(),
@@ -23,40 +21,27 @@ export default defineSchema({
 		// YouTube's public subscriber count. Optional for pre-cutover rows and
 		// channels whose stats are hidden; lifecycle derivation treats missing as 0.
 		subscriberCount: v.optional(v.number()),
-		// Content embedding powering Saturation via the vector index below
-		// (ADR-0003). Null until the embed cron backfills it.
+		// Deprecated compatibility fields from the retired Saturation/vector-search
+		// lifecycle. No active path writes or reads them.
 		embedding: v.optional(v.array(v.float64())),
-		// The channel's Saturation: the nearest-neighbor cluster size the embed cron
-		// derives from vector search. Read back by `recomputeListingsForChannel`
-		// (which falls back to snowball-graph density when this is unset) and ridden
-		// onto each of the channel's Listings. Per-channel because the embedding is.
 		saturation: v.optional(v.number()),
 		discoveredAt: v.number(),
 		source: sourceValidator,
 	})
 		.index("by_ytId", ["ytId"])
-		.index("by_source", ["source"])
-		// Nearest-neighbor search over channel embeddings drives Saturation. Only
-		// callable from an action, so the embed cron owns it (ADR-0003).
-		.vectorIndex("by_embedding", {
-			vectorField: "embedding",
-			dimensions: EMBEDDING_DIMENSIONS,
-		}),
+		.index("by_source", ["source"]),
 
-	// Individual uploads. `form` is denormalized per video from its duration so
-	// the read path never has to reclassify. `isStandard` is false for
-	// non-standard items (live streams, premieres) that the Proven gate excludes.
+	// Individual uploads. New ingestion stores fetched Shorts with current raw
+	// view counts. `form` is a deprecated optional compatibility field for rows
+	// written by the earlier per-form Listing model.
 	videos: defineTable({
 		ytId: v.string(),
 		channelId: v.id("channels"),
 		title: v.string(),
 		thumbnailUrl: v.optional(v.string()),
 		durationSec: v.number(),
-		form: formValidator,
+		form: v.optional(formValidator),
 		publishedAt: v.number(),
-		// Latest raw view count observed for this video. The short-form lifecycle
-		// reads current reach directly; snapshots remain only as historical samples
-		// for legacy Listing/momentum paths and old rows may not have this yet.
 		currentViewCount: v.optional(v.number()),
 		isStandard: v.boolean(),
 	})
@@ -65,16 +50,17 @@ export default defineSchema({
 		// them up the same way, so both paths need a direct lookup on `ytId`.
 		.index("by_ytId", ["ytId"]),
 
-	// The Momentum time-series: point-in-time view counts (ADR-0001). The latest
-	// snapshot per video is its current view count for the Proven gate.
+	// Deprecated compatibility table from the retired snapshot/momentum lifecycle.
+	// Kept so old rows can be purged safely by migration; active lifecycle paths
+	// do not write or read it.
 	videoSnapshots: defineTable({
 		videoId: v.id("videos"),
 		viewCount: v.number(),
 		at: v.number(),
 	}).index("by_video_and_at", ["videoId", "at"]),
 
-	// The reactive read model: one row per (channel, form) (ADR-0002). Only
-	// `proven` gates visibility; every other signal is nullable and scores only.
+	// Deprecated compatibility table from the retired per-form Listing lifecycle.
+	// Active Feed/Watchlist paths derive Channel lifecycle directly from videos.
 	listings: defineTable({
 		channelId: v.id("channels"),
 		form: formValidator,
@@ -159,9 +145,9 @@ export default defineSchema({
 	// the system. `rawInput` is the pasted text (trimmed of surrounding
 	// whitespace on submit); `submittedBy` is the
 	// better-auth user id. Status runs `pending → processing → tracked | failed`;
-	// a channel that ingests but misses the Proven gate is `tracked` (with a 0-proven
-	// `outcome`), never `failed`. `failed` is reserved for an unresolvable paste or an
-	// API error and carries a human `failureReason`. `resolvedYtChannelId` is the
+	// a channel that ingests but misses the Feed lifecycle is `tracked`, never
+	// `failed`. `failed` is reserved for an unresolvable paste or an API error and
+	// carries a human `failureReason`. `resolvedYtChannelId` is the
 	// canonical `UC…` id the paste resolved to and `channelId` the row it created or
 	// refreshed (idempotent per channel — a re-submit is a manual refresh). Listed
 	// newest-first off `_creationTime` for the live table (no extra index needed).

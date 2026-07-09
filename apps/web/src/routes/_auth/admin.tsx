@@ -212,28 +212,41 @@ function StatusBadge({ status }: { status: SubmissionRow["status"] }) {
 	);
 }
 
-/** The human read of a Submission's result: the Proven summary for a tracked
- * row, the failure reason for a failed one, a dash while it's still in flight. */
+const OUTCOME_STAGE_LABELS = {
+	emerging: "Emerging",
+	breaking_out: "Breaking Out",
+	established: "Established",
+	tracked: "Tracked off-Feed",
+} as const;
+
+/** The human read of a Submission's result: lifecycle state for tracked rows,
+ * the failure reason for failed rows, and a dash while still in flight. */
 function OutcomeText({ row }: { row: SubmissionRow }) {
 	if (row.status === "failed") {
 		return <span className="text-destructive">{row.failureReason}</span>;
 	}
 	if (row.status === "tracked") {
 		const outcome = row.outcome;
-		// No settled uploads cleared enough of a window to make a Listing yet — the
-		// channel is tracked and may qualify as snapshots accumulate.
-		if (!outcome || outcome.listings === 0) {
-			return <span>Tracked — not yet Proven</span>;
+		if (!outcome) {
+			return <span>Tracked</span>;
 		}
-		// Always surface the full summary — Listings created, of which Proven — so a
-		// channel that ingested but cleared none still shows what it produced.
-		const listings = `${outcome.listings} Listing${outcome.listings === 1 ? "" : "s"}`;
-		return (
-			<span className={outcome.proven > 0 ? "text-foreground" : undefined}>
-				{listings}, {outcome.proven} Proven
-				{outcome.proven === 0 ? " — not yet Proven" : ""}
-			</span>
-		);
+		if ("stage" in outcome) {
+			const stage = OUTCOME_STAGE_LABELS[outcome.stage];
+			const reach =
+				outcome.shortsAtOrAbove100k > 0
+					? `${outcome.shortsAtOrAbove100k}/${outcome.recentShortsChecked} Shorts at 100K+`
+					: `${outcome.shortsAtOrAbove50k}/${outcome.recentShortsChecked} Shorts at 50K+`;
+			return (
+				<span
+					className={
+						outcome.feedVisibility === "visible" ? "text-foreground" : undefined
+					}
+				>
+					{stage} · {outcome.fetchedShorts} Shorts · {reach}
+				</span>
+			);
+		}
+		return <span>Tracked before lifecycle cutover</span>;
 	}
 	return <span aria-hidden>—</span>;
 }

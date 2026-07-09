@@ -32,27 +32,17 @@ async function addVideo(
 		viewCount: number;
 		publishedAt: number;
 		durationSec?: number;
-		writeSnapshot?: boolean;
 	},
 ) {
-	const videoId = await ctx.db.insert("videos", {
+	return ctx.db.insert("videos", {
 		ytId: `yt_${opts.title.replace(/\s+/g, "_")}`,
 		channelId: opts.channelId,
 		title: opts.title,
 		durationSec: opts.durationSec ?? 45,
-		form: (opts.durationSec ?? 45) <= 300 ? "short" : "long",
 		publishedAt: opts.publishedAt,
 		currentViewCount: opts.viewCount,
 		isStandard: true,
 	});
-	if (opts.writeSnapshot ?? true) {
-		await ctx.db.insert("videoSnapshots", {
-			videoId,
-			viewCount: opts.viewCount,
-			at: Date.now(),
-		});
-	}
-	return videoId;
 }
 
 async function addShorts(
@@ -229,7 +219,6 @@ describe("feed query", () => {
 					title: `current count ${index}`,
 					viewCount,
 					publishedAt: Date.now() - (index + 1) * DAY,
-					writeSnapshot: false,
 				});
 			}
 		});

@@ -12,12 +12,11 @@ import { Bookmark } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
-
+import { ChannelCard, STAGE_LABELS } from "@/components/feed/channel-card";
 import {
 	ChannelDetailDialog,
 	type ChannelDetailSeed,
 } from "@/components/feed/channel-detail";
-import { ListingCard, STAGE_LABELS } from "@/components/feed/listing-card";
 import Loader from "@/components/loader";
 import {
 	useWatchlistDrawerOpen,
@@ -308,7 +307,7 @@ function FeedColumn({
 				</p>
 			) : (
 				cards.map((card) => (
-					<ListingCard
+					<ChannelCard
 						key={card.channelId}
 						card={card}
 						saved={savedKeys.has(card.channelId)}

@@ -37,7 +37,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
-import { initials } from "@/components/feed/listing-card";
+import { initials } from "@/components/feed/channel-card";
 import Loader from "@/components/loader";
 import { cn } from "@/lib/utils";
 import {
