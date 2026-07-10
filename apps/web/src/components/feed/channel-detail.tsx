@@ -348,7 +348,10 @@ function DetailBodyContent({ detail }: { detail: WatchlistDetail }) {
 								100K+ Shorts
 							</div>
 						</div>
-						<ClonabilityRead clonability={feed.clonability} />
+						<ClonabilityRead
+							clonability={feed.clonability}
+							signals={feed.signals}
+						/>
 					</div>
 					<div className="grid grid-cols-2 gap-2 rounded-md bg-muted/60 px-2 py-1 text-xs">
 						<span className="text-muted-foreground">Shorts fetched</span>

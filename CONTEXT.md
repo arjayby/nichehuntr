@@ -65,7 +65,8 @@ A short-form channel whose latest Short was published within the last 14 days an
 A short-form channel whose latest Short was published within the last 14 days and whose recent Shorts are clearing the higher recent-reach bar, but that has not yet met the Established maturity cutoff. If the channel has 10 or more fetched Shorts, at least 5 of the latest 10 must meet that bar; if it has 3-9 fetched Shorts, at least half rounded up must meet it. The sweet spot — clone _now_.
 
 **Established** (column 3):
-A short-form channel with Breaking Out-level recent reach that has already accumulated a mature audience and upload catalog: at least 50,000 subscribers and at least 50 fetched Shorts. It uses the same 100,000-view recent-reach rule as Breaking Out, but unlike Emerging and Breaking Out, Established does not require the latest Short to have been published within the last 14 days.
+A short-form channel with Breaking Out-level recent reach that has already accumulated a mature audience and upload catalog: at least 50,000 subscribers and at least 50 fetched Shorts. It uses the same 100,000-view recent-reach rule as Breaking Out, but unlike Emerging and Breaking Out, Established does not require the latest Short to have been published within the last 14 days. Operator's read: proven, but the incumbent has the head start — study the format; the easy entry has passed.
+_Avoid_: Too late, scroll past, crowded, saturated (crowding is not measured).
 
 **Snapshot**:
 Deprecated language from the earlier acceleration-based lifecycle. The simplified short-form lifecycle reads current video stats on refresh and does not require a view-count time series.

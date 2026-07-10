@@ -1,5 +1,9 @@
 import type { FeedCard } from "@nichehuntr/backend/convex/feed";
-import { topSignals } from "@nichehuntr/backend/convex/model/clonability";
+import {
+	CHANNEL_SIGNAL_NAMES,
+	type Signals,
+	topSignals,
+} from "@nichehuntr/backend/convex/model/clonability";
 import type { WatchlistSelection } from "@nichehuntr/backend/convex/watchlist";
 import {
 	Card,
@@ -7,6 +11,11 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@nichehuntr/ui/components/card";
+import {
+	HoverCard,
+	HoverCardContent,
+	HoverCardTrigger,
+} from "@nichehuntr/ui/components/hover-card";
 import { Bookmark, CalendarClock, ExternalLink, Video } from "lucide-react";
 
 /** Compact view-count formatter shared by Feed cards and the detail pane. */
@@ -31,26 +40,59 @@ const publishDate = new Intl.DateTimeFormat("en", {
 /**
  * Clonability score: the tunable weighted mean of the Channel's signals (CONTEXT.md).
  * It's the within-column sort key, so it reads as the card's headline number. A
- * dash until the enrich cron scores the Channel — Clonability never gates (ADR-0003).
+ * dash until Enrichment scores the Channel — Clonability never gates (ADR-0003).
+ * Hovering the number opens the Enrichment behind it: every scored signal with
+ * its full rationale, without leaving the Feed.
  */
 export function ClonabilityRead({
 	clonability,
+	signals,
 }: {
 	clonability: number | null;
+	signals: Signals | null;
 }) {
+	const scored = topSignals(signals, CHANNEL_SIGNAL_NAMES.length);
 	return (
 		<div className="text-right">
 			<div className="text-muted-foreground text-xs">Clonability</div>
-			<div
-				className="font-semibold text-lg tabular-nums"
-				title={
-					clonability === null
-						? "Clonability pending"
-						: "Weighted mean of this Channel's signals"
-				}
-			>
-				{clonability ?? "—"}
-			</div>
+			<HoverCard>
+				<HoverCardTrigger
+					render={<div className="font-semibold text-lg tabular-nums" />}
+				>
+					{clonability ?? "—"}
+				</HoverCardTrigger>
+				{/* stopPropagation: the popup portals inside the clickable Card's React
+				    tree, so a click on it would otherwise open the detail modal. */}
+				<HoverCardContent
+					className="w-72 text-left"
+					onClick={(event) => event.stopPropagation()}
+				>
+					{scored.length === 0 ? (
+						<p className="text-muted-foreground text-xs">
+							Clonability pending. Signals not scored yet.
+						</p>
+					) : (
+						<div className="flex flex-col gap-2">
+							<p className="text-muted-foreground text-xs">
+								Weighted mean of this Channel's signals
+							</p>
+							<ul className="flex flex-col gap-2">
+								{scored.map((signal) => (
+									<li key={signal.name} className="text-xs">
+										<div className="flex items-baseline gap-1.5">
+											<span className="font-medium">{signal.label}</span>
+											<span className="text-muted-foreground tabular-nums">
+												{signal.score}
+											</span>
+										</div>
+										<p className="text-muted-foreground">{signal.rationale}</p>
+									</li>
+								))}
+							</ul>
+						</div>
+					)}
+				</HoverCardContent>
+			</HoverCard>
 		</div>
 	);
 }
@@ -225,7 +267,10 @@ export function ChannelCard({
 								<ExternalLink className="size-4" />
 							</a>
 						</div>
-						<ClonabilityRead clonability={card.clonability} />
+						<ClonabilityRead
+							clonability={card.clonability}
+							signals={card.signals}
+						/>
 					</div>
 				</div>
 			</CardHeader>

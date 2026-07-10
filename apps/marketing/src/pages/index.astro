@@ -1,40 +1,34 @@
 ---
+import ChannelCardMock from "../components/ChannelCardMock.astro";
 import Footer from "../components/Footer.astro";
 import Header from "../components/Header.astro";
-import ListingCardMock from "../components/ListingCardMock.astro";
 import BaseLayout from "../layouts/BaseLayout.astro";
 
 const APP_URL = "https://app.nichehuntr.com";
 
 /*
- * Hero cards: one fictional listing per lifecycle stage, so the first viewport
+ * Hero cards: one fictional channel per lifecycle stage, so the first viewport
  * teaches the product's core mental model (Emerging → Breaking Out →
- * Established) with the app's real card anatomy.
+ * Established) with the app's real card anatomy. The numbers obey the real
+ * stage rules: Emerging clears the 50K bar but not 100K; Breaking Out clears
+ * 100K before maturity; Established keeps that reach with 50K+ subscribers and
+ * a deep catalog (and may not have uploaded this week — the rules allow it).
  */
 const heroCards = [
 	{
 		stage: "emerging",
 		card: {
-			title: "The Quiet Ledger",
-			handle: "thequietledger",
-			form: "long",
-			momentum: "+12%/d",
-			momentumTone: "up",
-			medianViews: "148K",
-			saturation: 2,
-			clonability: 74,
-			signals: [
-				{
-					label: "Format",
-					score: 81,
-					rationale: "Calm money storytelling over stock footage. Low production lift.",
-				},
-				{
-					label: "Demand",
-					score: 72,
-					rationale: "Comments beg for more uploads. The audience wants volume.",
-				},
-			],
+			title: "Cursed Frequencies",
+			handle: "cursedfrequencies",
+			subscribers: "8.4K",
+			recentChecked: 10,
+			above100k: 2,
+			above50k: 6,
+			fetchedShorts: 34,
+			latestShort: "Jul 6, 2026",
+			// Freshly surfaced: the stage is already decided, the score is still
+			// being computed. Channels appear before Clonability lands.
+			clonability: null,
 		},
 	},
 	{
@@ -42,44 +36,34 @@ const heroCards = [
 		card: {
 			title: "Midnight Archives",
 			handle: "midnightarchives",
-			form: "short",
-			momentum: "+34%/d",
-			momentumTone: "strong",
-			medianViews: "812K",
-			saturation: 4,
+			subscribers: "31K",
+			recentChecked: 10,
+			above100k: 7,
+			above50k: 9,
+			fetchedShorts: 46,
+			latestShort: "Jul 8, 2026",
 			clonability: 82,
 			signals: [
-				{
-					label: "Format",
-					score: 88,
-					rationale: "Faceless narration over AI stills. One editor can run it.",
-				},
-				{
-					label: "Barrier",
-					score: 79,
-					rationale: "No on camera talent. The whole pipeline is replicable.",
-				},
+				{ label: "Automatable", score: 88 },
+				{ label: "Improvable", score: 79 },
 			],
 		},
 	},
 	{
 		stage: "established",
 		card: {
-			title: "Rainframe Ambience",
-			handle: "rainframeambience",
-			form: "long",
-			momentum: "0%/d",
-			momentumTone: "flat",
-			medianViews: "1.2M",
-			saturation: 23,
-			saturationHigh: true,
-			clonability: 41,
+			title: "Pocket Histories",
+			handle: "pockethistories",
+			subscribers: "214K",
+			recentChecked: 10,
+			above100k: 6,
+			above50k: 8,
+			fetchedShorts: 312,
+			latestShort: "Jun 12, 2026",
+			clonability: 45,
 			signals: [
-				{
-					label: "Barrier",
-					score: 35,
-					rationale: "Twenty three channels run the same loop. Too late to enter.",
-				},
+				{ label: "Automatable", score: 51 },
+				{ label: "Transformative", score: 47 },
 			],
 		},
 	},
@@ -89,19 +73,19 @@ const stages = [
 	{
 		name: "Emerging",
 		verdict: "Early. Risky. First movers only.",
-		body: "Uploads are accelerating past the channel's own baseline, and almost nobody runs the niche yet. You could be first. You could also be early to a niche that never lands.",
+		body: "The latest Shorts are fresh and most of them already clear 50K views, but not the big bar yet. You could be first. You could also be early to a niche that never lands.",
 		highlight: false,
 	},
 	{
 		name: "Breaking Out",
 		verdict: "The window. Clone now.",
-		body: "Proven views, strong momentum, and only a handful of competitors. This is the column the whole product exists to find. When a niche sits here, the clock is running.",
+		body: "Fresh uploads, and recent Shorts clearing 100K views each, before the channel has banked a big audience. Proof is in; the head start is not. This is the column the whole product exists to find.",
 		highlight: true,
 	},
 	{
 		name: "Established",
-		verdict: "Too late. Scroll past.",
-		body: "The niche is crowded, or its growth already cooled. Big view counts here are a trap: the audience is split twenty ways and the algorithm has favorites. Keep your months of effort.",
+		verdict: "Proven. But you're late.",
+		body: "Recent Shorts still clear 100K views, and the channel has already banked 50K+ subscribers and a deep catalog. The niche works. This channel proved it. Study the format; the easy entry was a year ago.",
 		highlight: false,
 	},
 ];
@@ -109,23 +93,27 @@ const stages = [
 const faqs = [
 	{
 		q: "What exactly is NicheHuntr?",
-		a: "A discovery feed of YouTube channels that are provably working right now. Every listing is scored for momentum, saturation, and clonability, then placed in one of three lifecycle columns so you know whether the niche is worth entering today.",
+		a: "A curated feed of short form YouTube channels that are provably working right now. Every channel is placed in one of three lifecycle columns by plain view count math, then scored for clonability, so you know whether the niche is worth entering today.",
 	},
 	{
 		q: "Is cloning a niche actually okay?",
 		a: "You clone the niche and the format, never the videos. Nobody owns a format. Every big niche on YouTube today started with someone copying a play that was already working and executing it better. The platform rewards it: duplicated niches are how the algorithm confirms demand.",
 	},
 	{
-		q: "What does proven mean here?",
-		a: "We take a channel's recent uploads, drop the ones too fresh to have settled, and check the median view count against a hard threshold. Median, not average, so one lucky viral cannot fake it. A channel that was huge years ago and is dead now fails the gate.",
+		q: "How does a channel qualify for the feed?",
+		a: "Pure arithmetic on its latest ten Shorts. Enough of them clearing 50K views while uploads are fresh reads Emerging. Clearing 100K reads Breaking Out. Keep that 100K reach after banking 50K subscribers and a catalog of 50 Shorts and it reads Established. A channel that qualifies for none of the three stays tracked but hidden. Nothing fakes its way in.",
 	},
 	{
-		q: "How do you know when a niche is too crowded?",
-		a: "Saturation counts how many similar channels already compete for the same audience. A handful is an open field. Twenty is a wall. When saturation is high, the niche reads Established no matter how fast it is still growing, because that growth is already spoken for.",
+		q: "What if several channels run the same niche?",
+		a: "They show up as separate cards, on purpose. One channel clearing the bar can be a personality. Three channels independently earning the same way is a market. We do not count competitors or score crowdedness. The duplication itself is the signal, and it is bullish.",
 	},
 	{
-		q: "Do you cover Shorts?",
-		a: "Yes. Long form and Shorts are scored separately, with separate proof thresholds, because 100K views means something completely different in each. A channel can be breaking out in Shorts while established in long form, and the feed shows both.",
+		q: "Why Shorts only?",
+		a: "Because short form is the replicable game. Shorts run on repeatable formats, cheap production, and fast feedback, exactly the things a clone can copy. NicheHuntr tracks short form channels exclusively, so every number you see means what it should: 100K is always 100K views on a Short.",
+	},
+	{
+		q: "Where do these channels come from?",
+		a: "Hand picked, then machine graded. Our hunters submit candidate channels; the app pulls their live YouTube stats and the lifecycle math decides what appears and in which column. Nothing reaches the feed on anyone's word alone. The numbers have to agree.",
 	},
 	{
 		q: "Is there a free plan?",
@@ -135,8 +123,8 @@ const faqs = [
 ---
 
 <BaseLayout
-	title="NicheHuntr | Find proven YouTube niches worth cloning"
-	description="NicheHuntr tracks thousands of YouTube channels and surfaces the niches blowing up right now: proven views, rising momentum, and room for one more channel."
+	title="NicheHuntr | Find proven Shorts niches worth cloning"
+	description="NicheHuntr is a curated feed of short form YouTube channels that are provably working right now: real views on recent Shorts, a clear lifecycle stage, and a clonability score with receipts."
 >
 	<Header />
 
@@ -157,15 +145,15 @@ const faqs = [
 						></span>
 						<span class="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
 					</span>
-					// niche discovery for YouTube creators
+					// niche discovery for Shorts creators
 				</p>
 				<h1 class="text-balance text-4xl font-bold tracking-tight sm:text-6xl">
 					Stop guessing niches. <span class="text-primary">Clone what already works.</span>
 				</h1>
 				<p class="mx-auto mt-6 max-w-2xl text-balance text-base text-muted-foreground sm:text-lg">
-					You have uploaded for months and the algorithm gave you nothing. NicheHuntr tracks
-					thousands of channels and surfaces the niches blowing up right now: proven views, rising
-					momentum, and room for one more channel. Yours.
+					You have uploaded for months and the algorithm gave you nothing. NicheHuntr is a curated
+					feed of Shorts channels that are provably working right now: real views on recent
+					uploads, a clear lifecycle stage, and room for one more channel. Yours.
 				</p>
 				<div class="mt-10 flex flex-wrap items-center justify-center gap-4">
 					<a
@@ -197,11 +185,11 @@ const faqs = [
 							>
 								// {stage}
 							</p>
-							<ListingCardMock
+							<ChannelCardMock
 								{...card}
 								class={
 									stage === "breaking out"
-										? "border-primary/60 shadow-xl shadow-primary/10"
+										? "shadow-primary/10 shadow-xl ring-primary/60"
 										: stage === "established"
 											? "opacity-60"
 											: ""
@@ -223,8 +211,8 @@ const faqs = [
 					Every niche has a window. We tell you where it is.
 				</h2>
 				<p class="mt-4 text-muted-foreground">
-					Listings move left to right as a niche matures. Momentum pushes a niche forward.
-					Saturation closes the door behind it. You want the middle column.
+					Channels move left to right as they mature. Recent reach decides the column; nothing is
+					assigned by hand. You want the middle one.
 				</p>
 			</div>
 
@@ -274,38 +262,39 @@ const faqs = [
 	<section id="signals" class="scroll-mt-20 border-t border-border/60">
 		<div class="mx-auto max-w-6xl px-6 py-24">
 			<div class="mx-auto max-w-2xl text-center">
-				<p class="text-sm text-primary">// signals</p>
+				<p class="text-sm text-primary">// the reads</p>
 				<h2 class="mt-3 text-balance text-3xl font-bold tracking-tight sm:text-4xl">
-					Four signals. One question: should you clone it?
+					Two reads. One question: should you clone it?
 				</h2>
 				<p class="mt-4 text-muted-foreground">
-					No keyword spreadsheets. No vibes. Every listing carries the same four reads, straight
+					No keyword spreadsheets. No vibes. Every channel carries the same two reads, straight
 					from the feed.
 				</p>
 			</div>
 
 			<div class="mt-20 space-y-20">
-				<!-- 1. Proven gate -->
+				<!-- 1. Lifecycle evidence -->
 				<div class="grid items-center gap-10 lg:grid-cols-2">
 					<div>
-						<h3 class="text-2xl font-bold tracking-tight">Proof before anything else</h3>
+						<h3 class="text-2xl font-bold tracking-tight">The stage is math</h3>
 						<p class="mt-4 leading-relaxed text-muted-foreground">
-							Subscriber counts lie. A single viral lies harder. A channel only enters the feed
-							when the median view count of its recent uploads clears a hard threshold. Median,
-							not average, so one lucky hit and one dud change nothing. If it passes, the niche
-							pays consistently. If it was huge two years ago and is dead now, it never shows up.
+							Subscriber counts lie. A single viral lies harder. A channel's column comes from
+							counters anyone can check: how many of its latest ten Shorts already cleared 50K and
+							100K views, how fresh the latest upload is, and how much audience the channel has
+							banked. No AI, no weights, just arithmetic. Every card shows the evidence, so you
+							can check the math yourself.
 						</p>
 					</div>
 					<div class="rounded-xl border border-border bg-card p-6">
-						<p class="text-xs text-muted-foreground">// last 12 uploads, median vs gate</p>
+						<p class="text-xs text-muted-foreground">// latest 10 Shorts vs the 100K bar</p>
 						<div class="relative mt-6 flex h-32 items-end gap-2">
 							<div
 								class="absolute inset-x-0 bottom-[55%] border-t border-dashed border-primary/60"
 							>
-								<span class="absolute -top-5 right-0 text-[10px] text-primary">median 812K</span>
+								<span class="absolute -top-5 right-0 text-[10px] text-primary">100K views</span>
 							</div>
 							{
-								[45, 62, 38, 71, 96, 12, 58, 66, 52, 88, 49, 74].map((h) => (
+								[72, 61, 38, 78, 96, 22, 64, 85, 49, 70].map((h) => (
 									<div
 										class:list={[
 											"flex-1 rounded-t-sm",
@@ -317,136 +306,26 @@ const faqs = [
 							}
 						</div>
 						<div class="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs">
-							<span class="text-muted-foreground">Shorts gate: 500K per video</span>
+							<span class="text-muted-foreground">Recent reach: 7/10 over 100K</span>
 							<span class="rounded-full bg-primary px-2.5 py-0.5 font-semibold text-primary-foreground"
-								>PASS</span
+								>BREAKING OUT</span
 							>
 						</div>
 					</div>
 				</div>
 
-				<!-- 2. Momentum -->
-				<div class="grid items-center gap-10 lg:grid-cols-2">
-					<div class="lg:order-2">
-						<h3 class="text-2xl font-bold tracking-tight">Momentum you can time</h3>
-						<p class="mt-4 leading-relaxed text-muted-foreground">
-							We snapshot every channel on a schedule and measure how fast its recent videos grow
-							against the channel's own baseline. Not against MrBeast. Against itself. A niche
-							accelerating today beats a niche that peaked last year, and the badge on every card
-							tells you which one you are looking at.
-						</p>
-					</div>
-					<div class="rounded-xl border border-border bg-card p-6 lg:order-1">
-						<p class="text-xs text-muted-foreground">// recent daily growth vs own baseline</p>
-						<div class="mt-5 space-y-4">
-							<div class="flex items-center justify-between">
-								<span
-									class="inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-xs font-medium tabular-nums text-primary-foreground"
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										class="size-3"
-										aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17M16 7h6v6"></path></svg
-									>
-									+34%/d
-								</span>
-								<span class="text-xs text-muted-foreground">accelerating hard. the window.</span>
-							</div>
-							<div class="flex items-center justify-between">
-								<span class="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										class="size-3.5"
-										aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17M16 7h6v6"></path></svg
-									>
-									+9%/d
-								</span>
-								<span class="text-xs text-muted-foreground">warming up. watch it.</span>
-							</div>
-							<div class="flex items-center justify-between">
-								<span
-									class="inline-flex items-center gap-1 text-xs font-medium tabular-nums text-muted-foreground"
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										class="size-3.5"
-										aria-hidden="true"><path d="M5 12h14"></path></svg
-									>
-									0%/d
-								</span>
-								<span class="text-xs text-muted-foreground">cooled off. the window closed.</span>
-							</div>
-						</div>
-					</div>
-				</div>
-
-				<!-- 3. Saturation -->
-				<div class="grid items-center gap-10 lg:grid-cols-2">
-					<div>
-						<h3 class="text-2xl font-bold tracking-tight">Saturation before you commit</h3>
-						<p class="mt-4 leading-relaxed text-muted-foreground">
-							How many channels already run this exact play? Four is an open field. Twenty three is
-							a wall. Big view counts in a crowded niche are not opportunity, they are attention
-							already split twenty ways. You see the count on every card before you spend a single
-							weekend building.
-						</p>
-					</div>
-					<div class="rounded-xl border border-border bg-card p-6">
-						<p class="text-xs text-muted-foreground">// similar channels in the niche</p>
-						<div class="mt-5 space-y-5">
-							<div>
-								<div class="flex items-center justify-between text-xs">
-									<span>faceless AI horror Shorts</span>
-									<span class="font-medium tabular-nums text-primary">4 · open field</span>
-								</div>
-								<div class="mt-2 flex gap-1.5">
-									{[1, 2, 3, 4].map(() => <span class="size-3 rounded-full bg-primary/70" />)}
-								</div>
-							</div>
-							<div>
-								<div class="flex items-center justify-between text-xs">
-									<span>rain ambience loops</span>
-									<span class="font-medium tabular-nums text-destructive">23 · crowded</span>
-								</div>
-								<div class="mt-2 flex flex-wrap gap-1.5">
-									{
-										Array.from({ length: 23 }).map(() => (
-											<span class="size-3 rounded-full bg-destructive/50" />
-										))
-									}
-								</div>
-							</div>
-						</div>
-					</div>
-				</div>
-
-				<!-- 4. Clonability -->
+				<!-- 2. Clonability -->
 				<div class="grid items-center gap-10 lg:grid-cols-2">
 					<div class="lg:order-2">
 						<h3 class="text-2xl font-bold tracking-tight">A score with receipts</h3>
 						<p class="mt-4 leading-relaxed text-muted-foreground">
-							Every listing gets a clonability score, plus written rationales for the signals
-							underneath it: the format, the barrier to entry, what it actually takes to run the
-							channel. Not just a number to sort by. The why, in one line each, so you can disagree
-							with it.
+							Once a channel is on the feed, an AI pass reads its recent titles and thumbnails and
+							scores three signals. Automatable asks whether one editor can mass produce this from
+							a template. Transformative asks whether it repackages existing material instead of
+							creating from scratch. Improvable asks whether the incumbent is beatable while still
+							winning. Each signal comes with a written rationale in the channel's detail view. Not
+							just a number to sort by: the why, in one line each, so you can disagree with it. And
+							it never decides the column. The math does.
 						</p>
 					</div>
 					<div class="rounded-xl border border-border bg-card p-6 lg:order-1">
@@ -456,24 +335,24 @@ const faqs = [
 						</div>
 						<div class="mt-4 space-y-2.5 border-t border-border pt-4">
 							<div class="flex items-baseline gap-2 text-xs">
-								<span class="w-14 shrink-0 font-medium">Format</span>
+								<span class="w-24 shrink-0 font-medium">Automatable</span>
 								<span class="shrink-0 tabular-nums text-muted-foreground">88</span>
 								<span class="text-muted-foreground"
 									>Faceless narration over AI stills. One editor can run it.</span
 								>
 							</div>
 							<div class="flex items-baseline gap-2 text-xs">
-								<span class="w-14 shrink-0 font-medium">Barrier</span>
+								<span class="w-24 shrink-0 font-medium">Improvable</span>
 								<span class="shrink-0 tabular-nums text-muted-foreground">79</span>
 								<span class="text-muted-foreground"
-									>No on camera talent. The whole pipeline is replicable.</span
+									>Lazy thumbnails and flat pacing while the niche is still winning.</span
 								>
 							</div>
 							<div class="flex items-baseline gap-2 text-xs">
-								<span class="w-14 shrink-0 font-medium">Demand</span>
-								<span class="shrink-0 tabular-nums text-muted-foreground">75</span>
+								<span class="w-24 shrink-0 font-medium">Transformative</span>
+								<span class="shrink-0 tabular-nums text-muted-foreground">74</span>
 								<span class="text-muted-foreground"
-									>Watch time holds through full episodes. The niche retains.</span
+									>Repackages public-domain archives with an endless backlog.</span
 								>
 							</div>
 						</div>
@@ -492,7 +371,7 @@ const faqs = [
 					One plan. Cheaper than another month of guessing.
 				</h2>
 				<p class="mt-4 text-muted-foreground">
-					Every signal, every column, the full feed. No tiers to decode, no features held hostage.
+					Every read, every column, the full feed. No tiers to decode, no features held hostage.
 				</p>
 			</div>
 
@@ -537,12 +416,12 @@ const faqs = [
 					<ul class="mt-8 space-y-3 text-sm">
 						{
 							[
-								"The full discovery feed, updated continuously",
+								"The full curated feed of Shorts channels",
 								"All three lifecycle columns",
-								"Momentum measured from scheduled snapshots",
-								"Saturation counts on every niche",
+								"The evidence behind every stage, on every card",
 								"Clonability scores with written rationales",
-								"Long form and Shorts scored separately",
+								"A private watchlist with folders",
+								"Direct links to every channel on YouTube",
 							].map((item) => (
 								<li class="flex items-start gap-3">
 									<svg
@@ -621,8 +500,8 @@ const faqs = [
 					The next breakout niche is already on the feed.
 				</h2>
 				<p class="mx-auto mt-4 max-w-lg text-muted-foreground">
-					Somewhere on YouTube right now, a small channel is quietly printing views in a niche with
-					room for one more. Find it before the crowd does.
+					Somewhere on YouTube right now, a small Shorts channel is quietly printing views in a
+					niche with room for one more. Find it before the crowd does.
 				</p>
 				<a
 					href={`${APP_URL}/signup`}
