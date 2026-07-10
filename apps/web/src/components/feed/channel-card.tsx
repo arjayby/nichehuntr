@@ -47,17 +47,24 @@ const publishDate = new Intl.DateTimeFormat("en", {
 export function ClonabilityRead({
 	clonability,
 	signals,
+	labelClassName = "text-xs",
 }: {
 	clonability: number | null;
 	signals: Signals | null;
+	/** The card's stat row runs its labels a notch under the modal's text-xs. */
+	labelClassName?: string;
 }) {
 	const scored = topSignals(signals, CHANNEL_SIGNAL_NAMES.length);
 	return (
 		<div className="text-right">
-			<div className="text-muted-foreground text-xs">Clonability</div>
+			<div className={`text-muted-foreground ${labelClassName}`}>
+				Clonability
+			</div>
 			<HoverCard>
 				<HoverCardTrigger
-					render={<div className="font-semibold text-lg tabular-nums" />}
+					render={
+						<div className="cursor-help font-semibold text-lg tabular-nums underline decoration-muted-foreground decoration-dashed underline-offset-4" />
+					}
 				>
 					{clonability ?? "—"}
 				</HoverCardTrigger>
@@ -97,67 +104,54 @@ export function ClonabilityRead({
 	);
 }
 
-/**
- * The top signals behind the Clonability score, as label + score only — the
- * card stays scannable at the Feed's pace. The full one-line rationales the
- * Enrichment pass gave live in the channel-detail modal. Renders nothing until
- * the Channel is enriched.
- */
-function SignalScores({ card }: { card: FeedCard }) {
-	const tops = topSignals(card.signals, 2);
-	if (tops.length === 0) {
-		return null;
-	}
-	return (
-		<div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 border-t pt-2">
-			{tops.map((signal) => (
-				<div
-					key={signal.name}
-					className="flex min-w-0 items-baseline gap-1.5 text-xs"
-				>
-					<span className="truncate font-medium text-foreground">
-						{signal.label}
-					</span>
-					<span className="shrink-0 text-muted-foreground tabular-nums">
-						{signal.score}
-					</span>
-				</div>
-			))}
-		</div>
-	);
-}
-
 function EvidenceRead({ card }: { card: FeedCard }) {
 	const latest = card.evidence.latestShortPublishedAt;
 	return (
-		<div className="grid grid-cols-2 gap-3">
-			<div>
-				<div className="text-muted-foreground text-xs">Subscribers</div>
-				<div className="font-semibold text-lg tabular-nums">
-					{compactViews.format(card.evidence.subscriberCount)}
+		<div className="flex flex-col gap-3">
+			{/* Same three-stat row as the channel-detail modal, so the card and the
+			    modal read identically at a glance. */}
+			{/* Labels one notch below the modal's text-xs: three mono labels don't
+			    fit the card column at text-xs without wrapping. */}
+			<div className="flex items-end justify-between gap-2">
+				<div>
+					<div className="text-[11px] text-muted-foreground">Subscribers</div>
+					<div className="font-semibold text-lg tabular-nums">
+						{compactViews.format(card.evidence.subscriberCount)}
+					</div>
+				</div>
+				<div className="text-center">
+					<div className="whitespace-nowrap text-[11px] text-muted-foreground">
+						Recent reach
+					</div>
+					<div className="font-semibold text-lg tabular-nums">
+						{card.evidence.shortsAtOrAbove100k}/
+						{card.evidence.recentShortsChecked}
+					</div>
+					<div className="whitespace-nowrap text-[10px] text-muted-foreground">
+						100K+ Shorts
+					</div>
+				</div>
+				<ClonabilityRead
+					clonability={card.clonability}
+					signals={card.signals}
+					labelClassName="text-[11px]"
+				/>
+			</div>
+			<div className="flex items-center justify-between gap-2">
+				<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+					<Video className="size-3.5" aria-hidden />
+					<span className="whitespace-nowrap tabular-nums">
+						{card.evidence.fetchedShorts} Shorts fetched
+					</span>
+				</div>
+				<div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+					<CalendarClock className="size-3.5" aria-hidden />
+					<span className="truncate">
+						{latest === null ? "No Shorts yet" : publishDate.format(latest)}
+					</span>
 				</div>
 			</div>
-			<div className="text-right">
-				<div className="text-muted-foreground text-xs">Recent reach</div>
-				<div className="font-semibold text-lg tabular-nums">
-					{card.evidence.shortsAtOrAbove100k}/
-					{card.evidence.recentShortsChecked}
-				</div>
-				<div className="text-[11px] text-muted-foreground">100K+ Shorts</div>
-			</div>
-			<div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-				<Video className="size-3.5" aria-hidden />
-				<span className="tabular-nums">
-					{card.evidence.fetchedShorts} Shorts fetched
-				</span>
-			</div>
-			<div className="flex items-center justify-end gap-1.5 text-muted-foreground text-xs">
-				<CalendarClock className="size-3.5" aria-hidden />
-				<span className="truncate">
-					{latest === null ? "No Shorts yet" : publishDate.format(latest)}
-				</span>
-			</div>
-			<div className="col-span-2 flex items-center justify-between rounded-md bg-muted/60 px-2 py-1 text-xs">
+			<div className="flex items-center justify-between rounded-md bg-muted/60 px-2 py-1 text-xs">
 				<span className="text-muted-foreground">50K+ Shorts</span>
 				<span className="font-medium tabular-nums">
 					{card.evidence.shortsAtOrAbove50k}/{card.evidence.recentShortsChecked}
@@ -212,7 +206,9 @@ export function ChannelCard({
 			className="cursor-pointer transition-transform hover:-translate-y-0.5 hover:ring-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 		>
 			<CardHeader>
-				<div className="flex items-center gap-3">
+				{/* min-w-0: CardHeader is a grid, so without it this row sizes to
+				    max-content and long titles overflow the card instead of truncating. */}
+				<div className="flex min-w-0 items-center gap-3">
 					{card.channel.avatarUrl ? (
 						<img
 							src={card.channel.avatarUrl}
@@ -232,51 +228,42 @@ export function ChannelCard({
 							</p>
 						) : null}
 					</div>
-					<div className="ml-auto flex flex-col items-end gap-1">
-						{/* Save + open-on-YouTube ride together at the top right; both
-						    swallow the click so they never open the detail modal. */}
-						<div className="flex items-center gap-1">
-							<button
-								type="button"
-								aria-pressed={saved}
-								aria-label={
-									saved ? "Remove from Watchlist" : "Save to Watchlist"
-								}
-								title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
-								onClick={(event) => {
-									event.stopPropagation();
-									onToggleSave(card);
-								}}
-								className={`rounded-md p-1 transition-colors ${
-									saved
-										? "text-primary"
-										: "text-muted-foreground hover:text-foreground"
-								}`}
-							>
-								<Bookmark className={`size-4 ${saved ? "fill-current" : ""}`} />
-							</button>
-							<a
-								href={channelUrl(card.channel)}
-								target="_blank"
-								rel="noreferrer"
-								aria-label="Open channel on YouTube"
-								title="Open channel on YouTube"
-								onClick={(event) => event.stopPropagation()}
-								className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
-							>
-								<ExternalLink className="size-4" />
-							</a>
-						</div>
-						<ClonabilityRead
-							clonability={card.clonability}
-							signals={card.signals}
-						/>
+					{/* Save + open-on-YouTube ride together at the top right; both
+					    swallow the click so they never open the detail modal. */}
+					<div className="ml-auto flex items-center gap-1">
+						<button
+							type="button"
+							aria-pressed={saved}
+							aria-label={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+							title={saved ? "Remove from Watchlist" : "Save to Watchlist"}
+							onClick={(event) => {
+								event.stopPropagation();
+								onToggleSave(card);
+							}}
+							className={`rounded-md p-1 transition-colors ${
+								saved
+									? "text-primary"
+									: "text-muted-foreground hover:text-foreground"
+							}`}
+						>
+							<Bookmark className={`size-4 ${saved ? "fill-current" : ""}`} />
+						</button>
+						<a
+							href={channelUrl(card.channel)}
+							target="_blank"
+							rel="noreferrer"
+							aria-label="Open channel on YouTube"
+							title="Open channel on YouTube"
+							onClick={(event) => event.stopPropagation()}
+							className="rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+						>
+							<ExternalLink className="size-4" />
+						</a>
 					</div>
 				</div>
 			</CardHeader>
 			<CardContent>
 				<EvidenceRead card={card} />
-				<SignalScores card={card} />
 			</CardContent>
 		</Card>
 	);
