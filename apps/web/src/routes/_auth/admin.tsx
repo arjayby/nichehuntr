@@ -12,6 +12,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import Loader from "@/components/loader";
+import { inFlightChannelIds, rowAction } from "@/lib/submission-actions";
 
 /**
  * Admin surface: authenticated but NOT paywalled. It lives directly under
@@ -102,37 +103,6 @@ function SubmitBox() {
 	);
 }
 
-/**
- * The set of resolved YouTube channel ids that have a Submission currently
- * `pending` or `processing` — mirrors the server's in-flight guard so Refresh is
- * hidden on a tracked row whose Channel is already being (re)submitted. An
- * in-flight refresh carries the canonical id as its `rawInput` before it
- * resolves and as `resolvedYtChannelId` once it does, so we collect both.
- */
-function inFlightChannelIds(rows: readonly SubmissionRow[]): Set<string> {
-	const ids = new Set<string>();
-	for (const row of rows) {
-		if (row.status !== "pending" && row.status !== "processing") {
-			continue;
-		}
-		ids.add(row.rawInput);
-		if (row.resolvedYtChannelId) {
-			ids.add(row.resolvedYtChannelId);
-		}
-	}
-	return ids;
-}
-
-/** The Refresh affordance for a tracked row: shown only when it has a canonical
- * resolved id and no Submission for that Channel is already in flight. */
-function canRefresh(row: SubmissionRow, inFlight: Set<string>): boolean {
-	return (
-		row.status === "tracked" &&
-		row.resolvedYtChannelId !== null &&
-		!inFlight.has(row.resolvedYtChannelId)
-	);
-}
-
 /** The live Submissions table — reactive, newest-first, status → outcome. */
 function SubmissionsTable() {
 	const submissions = useQuery(api.submissions.listSubmissions);
@@ -164,27 +134,31 @@ function SubmissionsTable() {
 					</tr>
 				</thead>
 				<tbody>
-					{submissions.map((row) => (
-						<tr key={row._id} className="border-border border-b last:border-0">
-							<td className="max-w-xs truncate px-4 py-3 font-mono text-xs">
-								{row.rawInput}
-							</td>
-							<td className="px-4 py-3">
-								<StatusBadge status={row.status} />
-							</td>
-							<td className="px-4 py-3 text-muted-foreground">
-								<OutcomeText row={row} />
-							</td>
-							<td className="px-4 py-3 text-right">
-								{row.status === "failed" && (
-									<RetryButton submissionId={row._id} />
-								)}
-								{canRefresh(row, inFlight) && (
-									<RefreshButton submissionId={row._id} />
-								)}
-							</td>
-						</tr>
-					))}
+					{submissions.map((row) => {
+						const action = rowAction(row, inFlight);
+						return (
+							<tr
+								key={row._id}
+								className="border-border border-b last:border-0"
+							>
+								<td className="max-w-xs truncate px-4 py-3 font-mono text-xs">
+									{row.rawInput}
+								</td>
+								<td className="px-4 py-3">
+									<StatusBadge status={row.status} />
+								</td>
+								<td className="px-4 py-3 text-muted-foreground">
+									<OutcomeText row={row} />
+								</td>
+								<td className="px-4 py-3 text-right">
+									{action === "retry" && <RetryButton submissionId={row._id} />}
+									{action === "refresh" && (
+										<RefreshButton submissionId={row._id} />
+									)}
+								</td>
+							</tr>
+						);
+					})}
 				</tbody>
 			</table>
 		</div>
@@ -224,7 +198,7 @@ function RetryButton({ submissionId }: { submissionId: Id<"submissions"> }) {
 /** Refresh a tracked row — re-pulls the Channel's current stats by starting a
  * fresh Submission from its canonical resolved id (ADR-0007). On success a new
  * pending row appears in the reactive table and this row's Channel becomes
- * in-flight, so `canRefresh` hides this button until that refresh finishes; we
+ * in-flight, so `rowAction` hides this button until that refresh finishes; we
  * only clear `pending` on the error path. A concurrent refresh the server
  * rejects surfaces as a toast. */
 function RefreshButton({ submissionId }: { submissionId: Id<"submissions"> }) {
