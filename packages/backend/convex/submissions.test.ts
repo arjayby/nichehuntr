@@ -805,6 +805,126 @@ describe("refreshSubmission — start a fresh Submission for a tracked Channel",
 		).toBe(true);
 	});
 
+	it("uses the row's canonical resolved id, not the original handle paste", async () => {
+		const { t, admin } = await setup();
+		const handle = "@refreshhandle";
+		const resolvedId = ucId("resolvedcanon");
+		// A tracked row whose original paste was a handle that resolved to a
+		// different canonical id: refresh must re-pull by the stored resolved id, not
+		// re-paste the handle — so `rawInput` on the new row is the id, not `handle`.
+		const trackedId = await runOver(
+			t,
+			handle,
+			stubAdapter({
+				title: "Handle Target",
+				resolveHandleTo: resolvedId,
+				page: uploads(resolvedId, {
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+
+		const newId = await admin.mutation(api.submissions.refreshSubmission, {
+			submissionId: trackedId,
+		});
+		const row = await t.run((ctx) => ctx.db.get("submissions", newId));
+		expect(row).toMatchObject({ status: "pending", rawInput: resolvedId });
+		expect(row?.rawInput).not.toBe(handle);
+	});
+
+	it("records the refresh on the new row, leaving the original tracked row untouched", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("refreshhist");
+		const trackedId = await trackedRow(t, id);
+
+		const before = await t.run((ctx) => ctx.db.get("submissions", trackedId));
+
+		const newId = await admin.mutation(api.submissions.refreshSubmission, {
+			submissionId: trackedId,
+		});
+		// Drive the refresh through to a tracked outcome so a pipeline that wrote
+		// back onto the wrong row would be caught: the outcome must land on the new
+		// row, never the completed historical one (unlike Retry, which reuses its row).
+		await t.action((ctx) =>
+			runSubmission(
+				ctx,
+				stubAdapter({
+					title: "Refresh Target",
+					page: uploads(id, {
+						count: 3,
+						viewCount: 150_000,
+						ageDays: 1,
+						durationSec: SHORT_SEC,
+					}),
+				}),
+				newId,
+			),
+		);
+
+		const after = await t.run((ctx) => ctx.db.get("submissions", trackedId));
+		expect(after).toEqual(before);
+		expect(after?.status).toBe("tracked");
+	});
+
+	it("re-pulls current Channel and Video stats and can hide the Channel from the Feed", async () => {
+		const { t, admin, operator } = await setup();
+		const id = ucId("refreshfeed");
+		const strong = uploads(id, {
+			count: 3,
+			viewCount: 130_000,
+			ageDays: 1,
+			durationSec: SHORT_SEC,
+		});
+		const trackedId = await runOver(
+			t,
+			id,
+			stubAdapter({ title: "Refresh Feed Target", page: strong }),
+		);
+		expect((await feedTitlesByStage(operator)).breaking_out).toContain(
+			"Refresh Feed Target",
+		);
+
+		const newId = await admin.mutation(api.submissions.refreshSubmission, {
+			submissionId: trackedId,
+		});
+
+		// Drive the worker over the refresh's new row with a stub that reports the
+		// same Shorts collapsed to a trickle of views — the live worker the mutation
+		// scheduled would wire the networked adapter, so we run it directly here.
+		await t.action((ctx) =>
+			runSubmission(
+				ctx,
+				stubAdapter({
+					title: "Refresh Feed Target",
+					page: strong.map((video) => ({ ...video, viewCount: 1_000 })),
+				}),
+				newId,
+			),
+		);
+
+		const counts = await t.run(async (ctx) => ({
+			channels: (await ctx.db.query("channels").collect()).length,
+			videos: (await ctx.db.query("videos").collect()).length,
+			currentViewCounts: (await ctx.db.query("videos").collect()).map(
+				(video) => video.currentViewCount,
+			),
+		}));
+		expect(counts).toEqual({
+			channels: 1,
+			videos: 3,
+			currentViewCounts: [1_000, 1_000, 1_000],
+		});
+		expect(
+			await t.run((ctx) => ctx.db.get("submissions", newId)),
+		).toMatchObject({ status: "tracked" });
+		expect(
+			Object.values(await feedTitlesByStage(operator)).flat(),
+		).not.toContain("Refresh Feed Target");
+	});
+
 	it("rejects refreshing a row that isn't tracked", async () => {
 		const { t, admin } = await setup();
 		const submissionId = await t.run((ctx) =>
