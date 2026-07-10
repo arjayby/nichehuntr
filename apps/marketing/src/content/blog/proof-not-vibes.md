@@ -1,7 +1,8 @@
 ---
 title: "Pick Your Niche on Proof, Not Vibes"
-description: "Subscribers lie and one viral video lies harder. The median view count of recent uploads is the only number that tells you a niche actually works."
+description: "Subscribers lie and one viral video lies harder. How many of a channel's latest ten Shorts clear 100K views is the number that tells you a niche actually works."
 pubDate: 2026-06-19
+updatedDate: 2026-07-10
 tags: ["niches", "getting started"]
 ---
 
@@ -31,72 +32,72 @@ six years will have impressive lifetime numbers and a completely dead present.
 
 ## The number that tells the truth
 
-Take a channel's last 12 or so uploads. Throw out anything less than a week old,
-because fresh videos have not settled yet. Throw out livestreams and other
-oddballs. Now take the **median** view count of what remains.
+Take the channel's latest ten Shorts. Count how many cleared 100,000 views.
+That count is the verdict.
 
-The median is the whole trick. An average gets dragged around by one viral hit
-or one dud. The median does not care. It answers the only question that
-matters: **what does a normal video in this niche earn?** If the normal video
-clears a serious bar, the niche pays consistently. Consistency is what you can
-clone. Luck is not.
+The count is the whole trick, and it is honest in a way averages and totals
+can never be. A 4M viral in the batch is still just one Short over the bar:
+one out of ten, same as a video that scraped past at 101K. A dud cannot hide
+either; it simply fails to count. Ten recent uploads, one hard bar, one tally.
+It answers the only question that matters: **does a normal Short in this niche
+clear real money views, repeatedly?** Repeatability is what you can clone.
+Luck is not.
 
 <figure>
-<svg viewBox="0 0 640 300" role="img" aria-label="Bar chart of a channel's last 12 uploads. Eleven videos earn 7 to 15 thousand views and one outlier earns 60 thousand. A dashed average line sits at 14.7K, dragged up by the outlier; a solid median line sits at 10.5K, what a normal video actually earns." style="width:100%;height:auto">
-<line x1="24" y1="13" x2="44" y2="13" stroke="var(--primary)" stroke-width="2"/>
-<text x="52" y="17" font-size="12" fill="var(--foreground)">median 10.5K &#183; what a normal video earns</text>
-<line x1="24" y1="35" x2="44" y2="35" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="4 4"/>
-<text x="52" y="39" font-size="12" fill="var(--muted-foreground)">average 14.7K &#183; dragged up by one hit</text>
-<rect x="37" y="220" width="24" height="40" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="86" y="233" width="24" height="27" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="135" y="210" width="24" height="50" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="185" y="227" width="24" height="33" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="234" y="230" width="24" height="30" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="283" y="60" width="24" height="200" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="333" y="223" width="24" height="37" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="382" y="217" width="24" height="43" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="431" y="237" width="24" height="23" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="481" y="220" width="24" height="40" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="530" y="227" width="24" height="33" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<rect x="579" y="230" width="24" height="30" rx="2" fill="var(--muted-foreground)" fill-opacity="0.45"/>
-<text x="295" y="52" text-anchor="middle" font-size="12" fill="var(--muted-foreground)">the outlier &#183; 60K</text>
-<line x1="24" y1="211" x2="616" y2="211" stroke="var(--muted-foreground)" stroke-width="2" stroke-dasharray="4 4"/>
-<line x1="24" y1="225" x2="616" y2="225" stroke="var(--primary)" stroke-width="2"/>
+<svg viewBox="0 0 640 300" role="img" aria-label="Bar chart of a channel's latest ten Shorts against a bar of 100K views. Seven bars clear the line, three fall short. The read is seven of ten over 100K: the niche pays repeatedly." style="width:100%;height:auto">
+<line x1="24" y1="13" x2="44" y2="13" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 4"/>
+<text x="52" y="17" font-size="12" fill="var(--foreground)">the bar &#183; 100K views</text>
+<text x="52" y="39" font-size="12" fill="var(--muted-foreground)">the read &#183; 7 of 10 clear it</text>
+<rect x="37" y="138" width="24" height="122" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="96" y="115" width="24" height="145" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="155" y="202" width="24" height="58" rx="2" fill="var(--muted-foreground)" fill-opacity="0.35"/>
+<rect x="214" y="98" width="24" height="162" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="273" y="60" width="24" height="200" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="332" y="228" width="24" height="32" rx="2" fill="var(--muted-foreground)" fill-opacity="0.35"/>
+<rect x="391" y="126" width="24" height="134" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="450" y="148" width="24" height="112" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<rect x="509" y="176" width="24" height="84" rx="2" fill="var(--muted-foreground)" fill-opacity="0.35"/>
+<rect x="568" y="133" width="24" height="127" rx="2" fill="var(--primary)" fill-opacity="0.7"/>
+<line x1="24" y1="165" x2="616" y2="165" stroke="var(--primary)" stroke-width="2" stroke-dasharray="4 4"/>
 <line x1="24" y1="260" x2="616" y2="260" stroke="var(--border)" stroke-width="1"/>
-<text x="320" y="286" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">last 12 uploads &#183; views in thousands</text>
+<text x="320" y="286" text-anchor="middle" font-size="11" fill="var(--muted-foreground)">latest 10 Shorts &#183; views vs the 100K bar</text>
 </svg>
-<figcaption>One hit drags the average 40% above what a normal upload earns. The median does not move.</figcaption>
+<figcaption>One bar, one tally. A viral is one Short over the line; a dud just fails to count.</figcaption>
 </figure>
 
 ## What counts as passing
 
-The bar depends on format, because views are not one currency:
+For Shorts, the bar is 100,000 views, and the passing read is **at least five
+of the latest ten** clearing it. Half of everything the channel currently
+ships earning six figures is not luck. It is demand, confirmed upload after
+upload. A softer version of the same read, most recent Shorts clearing 50K,
+means the niche has a pulse but not proof yet: worth watching, not worth
+betting a channel on.
 
-- **Long form:** a median around 100K views per video means the niche is
-  genuinely working. Every regular upload reaching six figures is not luck,
-  it is demand.
-- **Shorts:** hold a much higher bar, something like 500K per video. Shorts
-  views are cheap. A Short hitting 100K is close to a participation trophy,
-  and cloning a participation trophy is how you get 200 views a day for two
-  more years.
+Two more filters, because the count can still be gamed by time:
 
-One more filter: recency. A channel that had monster medians in 2023 and
-nothing since fails. You are not cloning a museum exhibit. The window has to be
-open now.
+- **Recency.** The latest Short should be days old, not months. A channel that
+  cleared the bar all spring and stopped uploading in April is a museum
+  exhibit. The window has to be open now.
+- **Maturity.** The same seven of ten read means different things from a
+  channel with 9K subscribers and one with 400K. On the small channel it is a
+  niche breaking open. On the big one it is an incumbent collecting: proof the
+  niche pays, and proof somebody already owns it.
 
 ## Do it by hand, once
 
 You do not need a tool to run this check on a channel you are eyeing. Open the
-channel, go to the videos tab, sort by newest. Write down the view counts of
-the last 12 settled uploads. Cross out the biggest number and the smallest if
-you want to be quick about it, then look at the middle of the list. That
-middle number is your verdict.
+channel, go to the Shorts tab, and write down the view counts of the latest
+ten. Count how many cleared 100K. Note the date on the newest one and the
+subscriber count. That is the whole read. No spreadsheet, no formula, a tally
+you can do on your phone.
 
 Now do it for the next candidate niche. And the next. This is where honesty
-gets expensive: doing it properly across dozens of channels, week after week,
-watching for the medians that are rising instead of flat, is a part time job.
-That job is what NicheHuntr automates. Every channel in the feed already passed
-the median gate before you ever see it.
+gets expensive: running it across dozens of channels, week after week,
+catching the counts that are rising instead of flat, is a part time job. That
+job is what NicheHuntr does. Every card on the feed shows the tally of how
+many of the latest ten Shorts cleared 50K and 100K, so the proof is sitting
+there before you ever click.
 
 But the principle costs nothing, and it will save you from your own taste:
 **proof first, format second, your spin last.** Vibes are what got you two
