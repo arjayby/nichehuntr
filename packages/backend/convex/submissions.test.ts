@@ -7,6 +7,8 @@ import {
 } from "../test/harness";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { runEnrichChannel } from "./enrich";
+import type { EnrichmentAdapter } from "./model/clonability";
 import type { ChannelUpload, YouTubeAdapter } from "./model/youtube";
 import { runSubmission } from "./submissions";
 
@@ -130,6 +132,12 @@ async function submissionRow(
 ) {
 	const rows = await admin.query(api.submissions.listSubmissions, {});
 	return rows.find((r) => r._id === submissionId);
+}
+
+/** The scheduled functions convex-test recorded (nothing runs until finished),
+ * so a test can prove what a mutation/action queued without touching network. */
+async function scheduledFunctions(t: Awaited<ReturnType<typeof setup>>["t"]) {
+	return t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
 }
 
 async function feedTitlesByStage(
@@ -657,6 +665,232 @@ describe("runSubmission — the ingest spine", () => {
 			outcome: { stage: "breaking_out", feedVisibility: "visible" },
 		});
 		expect(row?.failureReason).toBeNull();
+	});
+});
+
+describe("runSubmission — schedules single-Channel Enrichment after tracking", () => {
+	it("schedules the enrich worker for that Channel only when the tracked row is visible", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("enrichvis");
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Visible Shorts",
+				page: uploads(id, {
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+
+		const channelId = (await submissionRow(admin, submissionId))?.channelId;
+		expect(channelId).toBeTruthy();
+
+		const scheduled = await scheduledFunctions(t);
+		const enrichJobs = scheduled.filter((job) =>
+			job.name.includes("enrichChannelWorker"),
+		);
+		expect(enrichJobs).toHaveLength(1);
+		expect(enrichJobs[0]?.args).toEqual([{ channelId }]);
+	});
+
+	it("does not schedule Enrichment for a hidden Tracked Channel", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("enrichhid");
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Hidden Tracked",
+				page: uploads(id, {
+					count: 3,
+					viewCount: 10_000, // below the Emerging threshold ⇒ hidden
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+
+		expect((await submissionRow(admin, submissionId))?.outcome).toMatchObject({
+			feedVisibility: "hidden",
+		});
+		const scheduled = await scheduledFunctions(t);
+		expect(
+			scheduled.filter((job) => job.name.includes("enrichChannelWorker")),
+		).toHaveLength(0);
+	});
+
+	it("leaves a tracked Submission tracked when the Enrichment follow-up fails", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("enrichfail");
+
+		const submissionId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Visible Shorts",
+				page: uploads(id, {
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+		const channelId = (await submissionRow(admin, submissionId))?.channelId;
+		expect(channelId).toBeTruthy();
+
+		// Run the enrichment follow-up with an adapter that throws — the scoring
+		// pass fails, but the Submission is a separate record and stays tracked.
+		const throwingAdapter: EnrichmentAdapter = {
+			enrich: async () => {
+				throw new Error("Anthropic API error");
+			},
+		};
+		const result = await t.action((ctx) =>
+			runEnrichChannel(ctx, throwingAdapter, channelId as Id<"channels">),
+		);
+		expect(result).toEqual({ status: "failed" });
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.status).toBe("tracked");
+		expect(row?.failureReason).toBeNull();
+	});
+});
+
+describe("refreshSubmission — start a fresh Submission for a tracked Channel", () => {
+	async function trackedRow(
+		t: Awaited<ReturnType<typeof setup>>["t"],
+		id: string,
+	) {
+		return runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Refresh Target",
+				page: uploads(id, {
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+	}
+
+	it("creates a new pending Submission from the resolved id and schedules the worker", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("refreshok");
+		const trackedId = await trackedRow(t, id);
+
+		const newId = await admin.mutation(api.submissions.refreshSubmission, {
+			submissionId: trackedId,
+		});
+		expect(newId).not.toEqual(trackedId);
+
+		const row = await t.run((ctx) => ctx.db.get("submissions", newId));
+		expect(row).toMatchObject({ status: "pending", rawInput: id });
+
+		const scheduled = await scheduledFunctions(t);
+		const workerJobs = scheduled.filter((job) =>
+			job.name.includes("submissionWorker"),
+		);
+		expect(
+			workerJobs.some((job) => job.args?.[0]?.submissionId === newId),
+		).toBe(true);
+	});
+
+	it("rejects refreshing a row that isn't tracked", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("failedrow"),
+				submittedBy: "someone",
+				status: "failed",
+				failureReason: "boom",
+			}),
+		);
+
+		await expect(
+			admin.mutation(api.submissions.refreshSubmission, { submissionId }),
+		).rejects.toThrow(/NOT_REFRESHABLE/);
+	});
+
+	it("rejects refreshing a tracked row that never resolved an id", async () => {
+		const { t, admin } = await setup();
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: "@orphan",
+				submittedBy: "someone",
+				status: "tracked",
+			}),
+		);
+
+		await expect(
+			admin.mutation(api.submissions.refreshSubmission, { submissionId }),
+		).rejects.toThrow(/NOT_REFRESHABLE/);
+	});
+
+	it("rejects a refresh while another Submission for the same Channel is in flight", async () => {
+		const { t, admin } = await setup();
+		const id = ucId("inflight");
+		const trackedId = await trackedRow(t, id);
+
+		// A pending Submission for the same resolved id is already in flight.
+		await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: id,
+				submittedBy: "someone",
+				status: "pending",
+			}),
+		);
+
+		await expect(
+			admin.mutation(api.submissions.refreshSubmission, {
+				submissionId: trackedId,
+			}),
+		).rejects.toThrow(/REFRESH_IN_FLIGHT/);
+	});
+
+	it("admin allowed, subscribed non-admin and anon rejected", async () => {
+		const t = createGatedTest();
+		const admin = await asAdmin(t, "refresh-admin");
+		const operator = await asSubscribedOperator(t, "refresh-op");
+		const id = ucId("refreshgate");
+		const trackedId = await runOver(
+			t,
+			id,
+			stubAdapter({
+				title: "Gate Target",
+				page: uploads(id, {
+					count: 3,
+					viewCount: 150_000,
+					ageDays: 1,
+					durationSec: SHORT_SEC,
+				}),
+			}),
+		);
+
+		await expect(
+			operator.mutation(api.submissions.refreshSubmission, {
+				submissionId: trackedId,
+			}),
+		).rejects.toThrow(/ADMIN_REQUIRED/);
+		await expect(
+			t.mutation(api.submissions.refreshSubmission, {
+				submissionId: trackedId,
+			}),
+		).rejects.toThrow(/UNAUTHENTICATED/);
+		await expect(
+			admin.mutation(api.submissions.refreshSubmission, {
+				submissionId: trackedId,
+			}),
+		).resolves.toBeDefined();
 	});
 });
 

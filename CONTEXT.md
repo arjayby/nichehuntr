@@ -25,7 +25,7 @@ The implicit, inferred content space a channel occupies (e.g. "AI horror shorts"
 _Avoid_: Category, tag (as a required field), vertical.
 
 **Feed**:
-The single global, shared discovery surface — one canonical set of tracked Channels + Snapshots that every Operator sees. Momentum and saturation are computed once, globally. Per-Operator personalization (long/short filter, stage filter, the [[Watchlist]]) is only a _lens_ on the Feed, never a private dataset.
+The single global, shared discovery surface — one canonical set of [[Tracked]] [[Channel]]s whose current lifecycle state is derived from the latest admin-submitted refresh data. [[Clonability]] is layered on when [[Enrichment]] exists. Per-Operator personalization (stage filter, the [[Watchlist]]) is only a _lens_ on the Feed, never a private dataset.
 _Avoid_: Dashboard, my channels.
 
 **Watchlist**:
@@ -41,14 +41,17 @@ A privileged operator authorized to submit [[Channel]]s into the [[Feed]]. Disti
 _Avoid_: Superuser, moderator, owner.
 
 **Submission**:
-An [[Admin]]'s request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. Replaces automated discovery (ADR-0005) as the sole way a channel enters the system. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel, doubling as a manual refresh.
+An [[Admin]]'s request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. Replaces automated discovery (ADR-0005) as the sole way a channel enters the system. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel; refreshing a tracked channel creates a new Submission for the same channel, making Submissions the only refresh path for channel stats.
 _Avoid_: Queue, request, candidate.
 
 **Tracked**:
-A channel that has been ingested and remains in the shared dataset, whether or not it currently qualifies for a lifecycle column. Tracked channels that miss the lifecycle rules are hidden from the Feed rather than treated as failed submissions.
+A channel that has been ingested and remains in the shared dataset, whether or not it currently qualifies for a lifecycle column. Tracked channels that miss the lifecycle rules are hidden from the Feed rather than treated as failed submissions. A channel can be Tracked before [[Enrichment]] finishes; enrichment failure does not make a Submission fail.
 _Avoid_: Failed, rejected.
 
 ## Discovery pipeline
+
+The admin-triggered path that turns a [[Submission]] into a [[Tracked]] [[Channel]] with current short-form uploads, lifecycle evidence, and, when visible, [[Enrichment]] signals. It starts when an [[Admin]] submits a channel and is not driven by cron upkeep.
+_Avoid_: Automated discovery, scheduled discovery.
 
 The three columns are a left-to-right **channel lifecycle**: a channel's position is a function of its recent short-form reach and channel maturity, so the Operator can time their clone. It is _not_ three independent sorted feeds.
 
@@ -83,7 +86,7 @@ Deprecated language from the earlier gate-first design. The simplified short-for
 _Metric note_: "100k" always means 100,000 views on an individual video, never channel totals or subscribers.
 
 **Enrichment**:
-The per-[[Channel]] AI pass that produces short-form subjective signals: a single multimodal call over the channel's metadata, recent video titles, and recent thumbnail images, returning a structured per-signal score plus a one-line rationale each. Feeds [[Clonability]] but never determines lifecycle stage or feed visibility.
+The per-[[Channel]] AI pass that produces short-form subjective signals for visible Feed channels: a single multimodal call over the channel's metadata, recent video titles, and recent thumbnail images, returning a structured per-signal score plus a one-line rationale each. Feeds [[Clonability]] but never determines lifecycle stage or feed visibility. Hidden [[Tracked]] channels are not enriched until a later [[Submission]] refresh makes them visible.
 
 **Clonability**:
 An overall per-[[Channel]] score synthesizing the subjective [[Enrichment]] signals into how attractive a short-form clone target is. Computed as a tunable weighted mean of [[Automatable]], [[Transformative]], and [[Improvable]]; it sharpens ranking and detail views within a lifecycle stage but never gates. Degrades gracefully: a channel can appear before its Clonability signals are computed.

@@ -80,8 +80,8 @@ export default defineSchema({
 	// pass's short-form signal scores (ADR-0003, ADR-0006). Kept off any derived
 	// read model because enrichment is expensive and must persist independently of
 	// lifecycle recomputes. `fingerprint` digests the inputs the scores came from,
-	// so the enrich cron re-runs a Channel only when its short-form metadata inputs
-	// materially change.
+	// so an enrich follow-up re-runs a Channel only when its short-form metadata
+	// inputs materially change.
 	enrichments: defineTable({
 		channelId: v.id("channels"),
 		signals: signalsValidator,

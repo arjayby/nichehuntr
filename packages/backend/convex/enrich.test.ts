@@ -4,7 +4,7 @@ import { setup } from "../test/harness";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { runEnrich } from "./enrich";
+import { runEnrichChannel } from "./enrich";
 import type {
 	EnrichmentAdapter,
 	EnrichmentInput,
@@ -95,6 +95,19 @@ function stubEnrichment(signalsFor: (input: EnrichmentInput) => Signals) {
 	return { adapter, calls };
 }
 
+/** An adapter whose `enrich` always throws — proves a skipped Channel never
+ * reaches it, and that a failing call writes nothing. */
+function throwingEnrichment() {
+	const calls: EnrichmentInput[] = [];
+	const adapter: EnrichmentAdapter = {
+		enrich: async (input) => {
+			calls.push(input);
+			throw new Error("Anthropic API error");
+		},
+	};
+	return { adapter, calls };
+}
+
 const shortSignals = (
 	automatable: number,
 	transformative: number,
@@ -118,8 +131,8 @@ async function enrichmentForChannel(
 	});
 }
 
-describe("runEnrich — channel-level short-form scoring", () => {
-	it("writes one channel-level enrichment row and exposes clonability on the Feed", async () => {
+describe("runEnrichChannel — single-channel short-form scoring", () => {
+	it("scores a visible channel and exposes clonability on the Feed", async () => {
 		const { t, operator } = await setup();
 		const channelId = await t.run((ctx) =>
 			addChannel(ctx, {
@@ -137,8 +150,10 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		});
 
 		const { adapter } = stubEnrichment(() => shortSignals(90, 50, 50));
-		const result = await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(result).toEqual({ enriched: 1, failed: 0 });
+		const result = await t.action((ctx) =>
+			runEnrichChannel(ctx, adapter, channelId),
+		);
+		expect(result).toEqual({ status: "enriched" });
 
 		const row = await enrichmentForChannel(t, channelId);
 		expect(row).toMatchObject({
@@ -162,7 +177,7 @@ describe("runEnrich — channel-level short-form scoring", () => {
 
 	it("builds enrichment input from short-form videos and ignores long-form uploads", async () => {
 		const { t } = await setup();
-		await t.run((ctx) =>
+		const channelId = await t.run((ctx) =>
 			addChannel(ctx, {
 				ytId: "mixed",
 				title: "Mixed Channel",
@@ -171,7 +186,7 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		);
 
 		const { adapter, calls } = stubEnrichment(() => shortSignals(50, 50, 50));
-		await t.action((ctx) => runEnrich(ctx, adapter));
+		await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId));
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toMatchObject({
@@ -189,9 +204,47 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		expect(calls[0]?.videos.every((v) => Boolean(v.thumbnailUrl))).toBe(true);
 	});
 
-	it("caches by channel and re-runs only when short-form inputs materially change", async () => {
+	it("skips a hidden channel without touching the adapter or writing signals", async () => {
 		const { t } = await setup();
-		await t.run((ctx) =>
+		// Weak short-form reach ⇒ tracked/hidden, so it must never be enriched.
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, {
+				ytId: "hidden",
+				title: "Hidden Tracked",
+				shortViews: [10_000, 12_000, 9_000],
+			}),
+		);
+
+		const { adapter, calls } = throwingEnrichment();
+		const result = await t.action((ctx) =>
+			runEnrichChannel(ctx, adapter, channelId),
+		);
+
+		expect(result).toEqual({ status: "skipped" });
+		expect(calls).toHaveLength(0);
+		expect(await enrichmentForChannel(t, channelId)).toBeNull();
+	});
+
+	it("skips a channel that vanished before the follow-up ran", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "ghost", title: "Ghost" }),
+		);
+		await t.run(async (ctx) => {
+			await ctx.db.delete("channels", channelId);
+		});
+
+		const { adapter, calls } = throwingEnrichment();
+		const result = await t.action((ctx) =>
+			runEnrichChannel(ctx, adapter, channelId),
+		);
+		expect(result).toEqual({ status: "skipped" });
+		expect(calls).toHaveLength(0);
+	});
+
+	it("re-runs only when short-form inputs materially change", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
 			addChannel(ctx, {
 				ytId: "cache",
 				title: "Cache Me",
@@ -200,12 +253,18 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		);
 		const { adapter, calls } = stubEnrichment(() => shortSignals(70, 50, 50));
 
-		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
 		expect(calls).toHaveLength(1);
 
-		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(0);
+		// Unchanged inputs ⇒ fingerprint matches ⇒ no adapter call.
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "skipped" });
 		expect(calls).toHaveLength(1);
 
+		// Retitling a long-form upload doesn't change the short-form fingerprint.
 		await t.run(async (ctx) => {
 			const long = await ctx.db
 				.query("videos")
@@ -215,9 +274,12 @@ describe("runEnrich — channel-level short-form scoring", () => {
 				await ctx.db.patch(long._id, { title: "Long retitle ignored" });
 			}
 		});
-		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(0);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "skipped" });
 		expect(calls).toHaveLength(1);
 
+		// Retitling a Short does — the fingerprint changes and it re-runs.
 		await t.run(async (ctx) => {
 			const short = await ctx.db
 				.query("videos")
@@ -227,8 +289,33 @@ describe("runEnrich — channel-level short-form scoring", () => {
 				await ctx.db.patch(short._id, { title: "Cache Me retitled" });
 			}
 		});
-		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
 		expect(calls).toHaveLength(2);
+	});
+
+	it("isolates an adapter failure — reports failed and writes nothing", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "boom", title: "Boom" }),
+		);
+
+		const { adapter, calls } = throwingEnrichment();
+		const result = await t.action((ctx) =>
+			runEnrichChannel(ctx, adapter, channelId),
+		);
+
+		expect(result).toEqual({ status: "failed" });
+		expect(calls).toHaveLength(1); // the visible channel was attempted
+		expect(await enrichmentForChannel(t, channelId)).toBeNull();
+
+		// The fingerprint stayed unwritten, so a healthy retry still enriches it.
+		const { adapter: healthy } = stubEnrichment(() => shortSignals(80, 60, 40));
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, healthy, channelId)),
+		).toEqual({ status: "enriched" });
+		expect(await enrichmentForChannel(t, channelId)).not.toBeNull();
 	});
 
 	it("collapses duplicate channel enrichment rows when refreshing stale signals", async () => {
@@ -257,7 +344,9 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		});
 
 		const { adapter } = stubEnrichment(() => shortSignals(80, 60, 40));
-		expect((await t.action((ctx) => runEnrich(ctx, adapter))).enriched).toBe(1);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
 
 		const rows = await t.run((ctx) =>
 			ctx.db
@@ -267,25 +356,5 @@ describe("runEnrich — channel-level short-form scoring", () => {
 		);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.signals.automatable?.score).toBe(80);
-	});
-
-	it("reuses channel enrichment across lifecycle reads", async () => {
-		const { t, operator } = await setup();
-		const channelId = await t.run((ctx) =>
-			addChannel(ctx, { ytId: "keep", title: "Keep Me" }),
-		);
-
-		const { adapter } = stubEnrichment(() => shortSignals(90, 30, 30));
-		await t.action((ctx) => runEnrich(ctx, adapter));
-		expect(
-			(await operator.query(api.feed.feed, {})).flatMap((g) => g.cards)[0]
-				?.clonability,
-		).toBe(60);
-
-		const card = (await operator.query(api.feed.feed, {}))
-			.flatMap((g) => g.cards)
-			.find((item) => item.channelId === channelId);
-		expect(card?.clonability).toBe(60);
-		expect(card?.signals?.automatable.score).toBe(90);
 	});
 });
