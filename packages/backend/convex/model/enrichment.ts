@@ -9,7 +9,7 @@
  * Enrichment). Like the YouTube and embeddings adapters this is a "humble object" —
  * it only maps the request/response and holds no policy. The tunable weighting
  * that turns these signals into Clonability lives in the pure `clonability.ts`, and
- * the enrich cron drives this behind the `EnrichmentAdapter` seam so tests run
+ * the single-Channel enrich action drives this behind the `EnrichmentAdapter` seam so tests run
  * against a stub and never hit the network. Transcripts are deliberately out of
  * scope — too costly for marginal gain on these judgments (CONTEXT.md).
  */

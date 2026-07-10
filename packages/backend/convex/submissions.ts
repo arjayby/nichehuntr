@@ -21,7 +21,7 @@ import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { ActionCtx } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
 import {
 	internalAction,
 	internalMutation,
@@ -61,6 +61,34 @@ export type SubmissionRow = {
 	outcome: SubmissionOutcome | null;
 	failureReason: string | null;
 };
+
+/**
+ * Whether a Submission for `ytChannelId` is already in flight (`pending` or
+ * `processing`) — the guard that stops a duplicate Refresh from racing an
+ * in-progress one. Derives from existing fields rather than a dedicated index
+ * (ADR-0007): an in-flight refresh carries the canonical id as its `rawInput`
+ * before it resolves, and a processing row that already resolved carries it as
+ * `resolvedYtChannelId`, so matching either catches both. The Submissions set an
+ * Admin curates is small enough to scan.
+ */
+async function hasInFlightSubmissionFor(
+	ctx: QueryCtx,
+	ytChannelId: string,
+): Promise<boolean> {
+	const inFlight = await ctx.db
+		.query("submissions")
+		.filter((q) =>
+			q.or(
+				q.eq(q.field("status"), "pending"),
+				q.eq(q.field("status"), "processing"),
+			),
+		)
+		.collect();
+	return inFlight.some(
+		(row) =>
+			row.resolvedYtChannelId === ytChannelId || row.rawInput === ytChannelId,
+	);
+}
 
 // --- Admin-facing mutation & query ---------------------------------------------
 
@@ -144,6 +172,47 @@ export const retrySubmission = mutation({
 	},
 });
 
+/**
+ * Refresh a `tracked` Channel by starting a fresh Submission for it — the
+ * deliberate way to re-pull a known Channel's stats without re-pasting its URL
+ * (ADR-0007). Admin-gated; creates a new `pending` Submission whose `rawInput`
+ * is the row's canonical `resolvedYtChannelId` (so handle changes or the
+ * original paste format can't affect the refresh) and schedules the worker over
+ * it, returning the new Submission id. Each refresh gets its own outcome
+ * history — unlike Retry, it never mutates the existing row.
+ *
+ * Only `tracked` rows with a resolved id can refresh (`NOT_REFRESHABLE`
+ * otherwise), and a refresh is rejected while another Submission for the same
+ * resolved channel id is already `pending`/`processing` (`REFRESH_IN_FLIGHT`),
+ * so duplicate in-flight refreshes can't race.
+ */
+export const refreshSubmission = mutation({
+	args: { submissionId: v.id("submissions") },
+	handler: async (ctx, { submissionId }): Promise<Id<"submissions">> => {
+		const admin = await requireAdmin(ctx);
+		const submission = await ctx.db.get("submissions", submissionId);
+		if (submission === null) {
+			throw new ConvexError("SUBMISSION_NOT_FOUND");
+		}
+		const resolvedYtChannelId = submission.resolvedYtChannelId;
+		if (submission.status !== "tracked" || !resolvedYtChannelId) {
+			throw new ConvexError("NOT_REFRESHABLE");
+		}
+		if (await hasInFlightSubmissionFor(ctx, resolvedYtChannelId)) {
+			throw new ConvexError("REFRESH_IN_FLIGHT");
+		}
+		const newSubmissionId = await ctx.db.insert("submissions", {
+			rawInput: resolvedYtChannelId,
+			submittedBy: admin._id,
+			status: "pending",
+		});
+		await ctx.scheduler.runAfter(0, internal.submissions.submissionWorker, {
+			submissionId: newSubmissionId,
+		});
+		return newSubmissionId;
+	},
+});
+
 // --- Internal mutations & query (the DB seam the worker drives) -----------------
 
 /** Mark a Submission `processing` and hand its raw paste to the worker in one
@@ -164,6 +233,12 @@ export const beginSubmission = internalMutation({
  * Finish a Submission as `tracked`: derive the current short-form Channel
  * lifecycle evidence and stamp the resolved id / channel / outcome. Missing a
  * visible lifecycle stage still lands here — the channel remains tracked.
+ *
+ * When the tracked Channel is Feed-visible, schedule a separate immediate
+ * single-Channel Enrichment follow-up for that Channel only (ADR-0007). Hidden
+ * Tracked Channels get no follow-up — scoring off-Feed Channels would be wasted
+ * Anthropic budget. Enrichment runs after this write and independently: its
+ * success or failure never changes the `tracked` status recorded here.
  */
 export const completeSubmission = internalMutation({
 	args: {
@@ -210,6 +285,13 @@ export const completeSubmission = internalMutation({
 			},
 			failureReason: undefined,
 		});
+		if (lifecycle.feedVisibility === "visible") {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.enrichChannel.enrichChannelWorker,
+				{ channelId: channel._id },
+			);
+		}
 		return null;
 	},
 });

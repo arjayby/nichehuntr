@@ -10,9 +10,8 @@
 
 import type * as admin from "../admin.js";
 import type * as auth from "../auth.js";
-import type * as crons from "../crons.js";
 import type * as enrich from "../enrich.js";
-import type * as enrichCron from "../enrichCron.js";
+import type * as enrichChannel from "../enrichChannel.js";
 import type * as feed from "../feed.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as http from "../http.js";
@@ -40,9 +39,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   auth: typeof auth;
-  crons: typeof crons;
   enrich: typeof enrich;
-  enrichCron: typeof enrichCron;
+  enrichChannel: typeof enrichChannel;
   feed: typeof feed;
   healthCheck: typeof healthCheck;
   http: typeof http;

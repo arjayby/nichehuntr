@@ -35,7 +35,7 @@ export type FeedCard = {
 	evidence: LifecycleEvidence;
 	clonability: number | null;
 	/** Short-form Enrichment scores + rationales behind Clonability. Null until
-	 * the enrich cron scores this Channel's Shorts; it never gates visibility. */
+	 * the Channel's Shorts are enriched; it never gates visibility. */
 	signals: Signals | null;
 	channel: {
 		ytId: string;

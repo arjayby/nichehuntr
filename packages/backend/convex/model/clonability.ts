@@ -155,7 +155,7 @@ export type EnrichmentInput = {
 };
 
 /**
- * The seam the enrich cron depends on. The real implementation makes a multimodal
+ * The seam the enrich action depends on. The real implementation makes a multimodal
  * Claude call (`enrichment.ts`); tests pass a stub so no network is hit — mirroring
  * the embeddings adapter.
  */
@@ -170,8 +170,8 @@ export type EnrichmentAdapter = {
 const FINGERPRINT_SEPARATOR = String.fromCharCode(0);
 
 /**
- * A deterministic fingerprint of a Channel's enrichment inputs. The enrich cron
- * re-runs a Channel only when this changes (CONTEXT.md: "re-runs on material
+ * A deterministic fingerprint of a Channel's enrichment inputs. The enrich
+ * follow-up re-runs a Channel only when this changes (CONTEXT.md: "re-runs on material
  * change") — so an edited title, a swapped thumbnail, or a new upload triggers a
  * refresh, while an unchanged Channel stays cached. Bounded because the caller
  * caps how many videos it folds in.
