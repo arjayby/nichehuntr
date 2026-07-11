@@ -4,6 +4,7 @@ import {
 	buildEnrichmentFingerprint,
 	CHANNEL_SIGNAL_NAMES,
 	computeClonability,
+	ENRICHMENT_FINGERPRINT_VERSION,
 	type EnrichmentInput,
 	type Signals,
 	topSignals,
@@ -192,5 +193,16 @@ describe("buildEnrichmentFingerprint — material-change detection", () => {
 		expect(buildEnrichmentFingerprint(edited)).not.toBe(
 			buildEnrichmentFingerprint(input),
 		);
+	});
+
+	it("bakes in the output-version tag so a version bump invalidates cached scores", () => {
+		// The version is the first component of the fingerprint, so bumping
+		// ENRICHMENT_FINGERPRINT_VERSION makes every previously stored fingerprint
+		// mismatch — already-enriched channels re-enrich rather than skip.
+		expect(
+			buildEnrichmentFingerprint(input).startsWith(
+				`${ENRICHMENT_FINGERPRINT_VERSION}\0`,
+			),
+		).toBe(true);
 	});
 });

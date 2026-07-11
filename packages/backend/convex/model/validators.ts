@@ -66,6 +66,40 @@ export type SubmissionStatus = Infer<typeof submissionStatusValidator>;
 export type SubmissionOutcome = Infer<typeof submissionOutcomeValidator>;
 export type SubmissionSource = Infer<typeof submissionSourceValidator>;
 
+/** Where a Niche Query phrase came from (CONTEXT.md: Niche Query, ADR-0008).
+ * `seeded` names a visible Channel's own niche and `adjacent` a neighboring one —
+ * both minted by Enrichment. `wildcat` is the Scout's unseeded exploration call
+ * (a later slice mints those). Closed set so a new origin is a deliberate schema
+ * change. */
+export const nicheQueryOriginValidator = v.union(
+	v.literal("seeded"),
+	v.literal("adjacent"),
+	v.literal("wildcat"),
+);
+
+/** The subset of origins the Enrichment pass can mint: a Channel's own niche
+ * (`seeded`) and adjacent niches (`adjacent`). `wildcat` comes from the Scout, not
+ * enrichment, so the enrichment write path can never stamp it. */
+export const mintedNicheQueryOriginValidator = v.union(
+	v.literal("seeded"),
+	v.literal("adjacent"),
+);
+
+/** One phrase the Enrichment pass mints into the Scout's pool: the search text
+ * plus the origin it was discovered through (own niche or adjacent). Kept next to
+ * the origin validators so the enrichment write path and the schema share one
+ * source for the shape. */
+export const mintedNicheQueryValidator = v.object({
+	phrase: v.string(),
+	origin: mintedNicheQueryOriginValidator,
+});
+
+export type NicheQueryOrigin = Infer<typeof nicheQueryOriginValidator>;
+export type MintedNicheQueryOrigin = Infer<
+	typeof mintedNicheQueryOriginValidator
+>;
+export type MintedNicheQuery = Infer<typeof mintedNicheQueryValidator>;
+
 /** One AI-derived Clonability signal: a 0–100 score plus a one-line rationale. */
 export const signalValidator = v.object({
 	score: v.number(),

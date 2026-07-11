@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { setup } from "../test/harness";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { runEnrichChannel } from "./enrich";
 import type {
 	EnrichmentAdapter,
 	EnrichmentInput,
+	EnrichmentNicheQuery,
+	EnrichmentResult,
 	Signals,
 } from "./model/clonability";
 
@@ -84,16 +86,24 @@ async function addVideo(
 	});
 }
 
-function stubEnrichment(signalsFor: (input: EnrichmentInput) => Signals) {
+function stubEnrichment(
+	resultFor: (input: EnrichmentInput) => EnrichmentResult,
+) {
 	const calls: EnrichmentInput[] = [];
 	const adapter: EnrichmentAdapter = {
 		enrich: async (input) => {
 			calls.push(input);
-			return signalsFor(input);
+			return resultFor(input);
 		},
 	};
 	return { adapter, calls };
 }
+
+/** Wrap signals (and optional minted Niche Queries) as an adapter result. */
+const enrichResult = (
+	signals: Signals,
+	nicheQueries: EnrichmentNicheQuery[] = [],
+): EnrichmentResult => ({ signals, nicheQueries });
 
 /** An adapter whose `enrich` always throws — proves a skipped Channel never
  * reaches it, and that a failing call writes nothing. */
@@ -149,7 +159,9 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 			signals: null,
 		});
 
-		const { adapter } = stubEnrichment(() => shortSignals(90, 50, 50));
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(90, 50, 50)),
+		);
 		const result = await t.action((ctx) =>
 			runEnrichChannel(ctx, adapter, channelId),
 		);
@@ -185,7 +197,9 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 			}),
 		);
 
-		const { adapter, calls } = stubEnrichment(() => shortSignals(50, 50, 50));
+		const { adapter, calls } = stubEnrichment(() =>
+			enrichResult(shortSignals(50, 50, 50)),
+		);
 		await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId));
 
 		expect(calls).toHaveLength(1);
@@ -251,7 +265,9 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 				longViews: [1_000_000],
 			}),
 		);
-		const { adapter, calls } = stubEnrichment(() => shortSignals(70, 50, 50));
+		const { adapter, calls } = stubEnrichment(() =>
+			enrichResult(shortSignals(70, 50, 50)),
+		);
 
 		expect(
 			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
@@ -311,7 +327,9 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 		expect(await enrichmentForChannel(t, channelId)).toBeNull();
 
 		// The fingerprint stayed unwritten, so a healthy retry still enriches it.
-		const { adapter: healthy } = stubEnrichment(() => shortSignals(80, 60, 40));
+		const { adapter: healthy } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40)),
+		);
 		expect(
 			await t.action((ctx) => runEnrichChannel(ctx, healthy, channelId)),
 		).toEqual({ status: "enriched" });
@@ -343,7 +361,9 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 			return id;
 		});
 
-		const { adapter } = stubEnrichment(() => shortSignals(80, 60, 40));
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40)),
+		);
 		expect(
 			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
 		).toEqual({ status: "enriched" });
@@ -356,5 +376,141 @@ describe("runEnrichChannel — single-channel short-form scoring", () => {
 		);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.signals.automatable?.score).toBe(80);
+	});
+});
+
+async function searchQueriesFor(t: Awaited<ReturnType<typeof setup>>["t"]) {
+	return t.run((ctx) => ctx.db.query("searchQueries").collect());
+}
+
+describe("runEnrichChannel — minting Niche Queries into the Scout pool", () => {
+	it("lands own-niche and adjacent-niche phrases with correct origins", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "niche", title: "AI Horror" }),
+		);
+
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40), [
+				{ phrase: "ai horror shorts", origin: "seeded" },
+				{ phrase: "faceless narration horror", origin: "seeded" },
+				{ phrase: "reddit scary stories", origin: "adjacent" },
+			]),
+		);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
+
+		const rows = await searchQueriesFor(t);
+		expect(
+			rows
+				.map((row) => ({ phrase: row.phrase, origin: row.origin }))
+				.sort((a, b) => a.phrase.localeCompare(b.phrase)),
+		).toEqual([
+			{ phrase: "ai horror shorts", origin: "seeded" },
+			{ phrase: "faceless narration horror", origin: "seeded" },
+			{ phrase: "reddit scary stories", origin: "adjacent" },
+		]);
+		expect(rows.every((row) => row.consecutiveZeroYield === 0)).toBe(true);
+	});
+
+	it("revives a minted phrase through a real re-enrichment, resetting its counter", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "revive", title: "Revive" }),
+		);
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40), [
+				{ phrase: "ai horror shorts", origin: "seeded" },
+			]),
+		);
+
+		// First enrichment mints the phrase.
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
+
+		// Simulate the Scout having run it fruitlessly a few times.
+		await t.run(async (ctx) => {
+			const [row] = await ctx.db.query("searchQueries").collect();
+			if (row) {
+				await ctx.db.patch(row._id, { consecutiveZeroYield: 3 });
+			}
+		});
+
+		// Retitle a Short so the fingerprint changes and the channel re-enriches,
+		// re-minting the same phrase through the orchestration seam.
+		await t.run(async (ctx) => {
+			const short = await ctx.db
+				.query("videos")
+				.withIndex("by_ytId", (q) => q.eq("ytId", "revive_short_0"))
+				.unique();
+			if (short) {
+				await ctx.db.patch(short._id, { title: "Revive retitled" });
+			}
+		});
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
+
+		const rows = await searchQueriesFor(t);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.consecutiveZeroYield).toBe(0);
+	});
+
+	it("normalizes case/whitespace so a phrase dedupes to one row", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "norm", title: "Norm" }),
+		);
+
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40), [
+				{ phrase: "  AI   Horror  Shorts ", origin: "seeded" },
+			]),
+		);
+		await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId));
+
+		const rows = await searchQueriesFor(t);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.phrase).toBe("ai horror shorts");
+	});
+
+	it("never fails a channel's enrichment when it mints no phrases", async () => {
+		const { t } = await setup();
+		const channelId = await t.run((ctx) =>
+			addChannel(ctx, { ytId: "empty", title: "No Queries" }),
+		);
+
+		const { adapter } = stubEnrichment(() =>
+			enrichResult(shortSignals(80, 60, 40)),
+		);
+		expect(
+			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
+		).toEqual({ status: "enriched" });
+		expect(await searchQueriesFor(t)).toHaveLength(0);
+	});
+});
+
+describe("listVisibleChannelIds — the launch sweep's target set", () => {
+	it("returns only Feed-visible channels, skipping hidden Tracked ones", async () => {
+		const { t } = await setup();
+		const visibleId = await t.run((ctx) =>
+			addChannel(ctx, {
+				ytId: "sweep_visible",
+				title: "Visible",
+				shortViews: [120_000, 130_000, 140_000],
+			}),
+		);
+		await t.run((ctx) =>
+			addChannel(ctx, {
+				ytId: "sweep_hidden",
+				title: "Hidden",
+				shortViews: [9_000, 8_000, 7_000],
+			}),
+		);
+
+		const ids = await t.query(internal.enrich.listVisibleChannelIds, {});
+		expect(ids).toEqual([visibleId]);
 	});
 });
