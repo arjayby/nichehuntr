@@ -7,6 +7,7 @@ import {
 	sourceValidator,
 	stageValidator,
 	submissionOutcomeValidator,
+	submissionSourceValidator,
 	submissionStatusValidator,
 } from "./model/validators";
 
@@ -140,11 +141,15 @@ export default defineSchema({
 		userId: v.string(),
 	}).index("by_userId", ["userId"]),
 
-	// Admin Submissions (ADR-0005): an Admin's request to bring a Channel into the
-	// Feed, together with its ingestion outcome — the sole way a Channel now enters
-	// the system. `rawInput` is the pasted text (trimmed of surrounding
-	// whitespace on submit); `submittedBy` is the
-	// better-auth user id. Status runs `pending → processing → tracked | failed`;
+	// Submissions (ADR-0005, ADR-0008): a request to bring a Channel into the Feed,
+	// together with its ingestion outcome — the sole way a Channel now enters the
+	// system. `source` records which front door it came through: an `admin` paste
+	// (the manual-boost path) or the automated `Scout`. `submittedBy` is the
+	// better-auth user id of the submitting Admin — optional because Scout
+	// submissions have no user. Both are widen-style optionals so pre-Scout rows
+	// (which predate `source`) stay valid and read as `admin`; every live write
+	// stamps `source`. `rawInput` is the pasted text (trimmed of surrounding
+	// whitespace on submit). Status runs `pending → processing → tracked | failed`;
 	// a channel that ingests but misses the Feed lifecycle is `tracked`, never
 	// `failed`. `failed` is reserved for an unresolvable paste or an API error and
 	// carries a human `failureReason`. `resolvedYtChannelId` is the
@@ -153,7 +158,8 @@ export default defineSchema({
 	// newest-first off `_creationTime` for the live table (no extra index needed).
 	submissions: defineTable({
 		rawInput: v.string(),
-		submittedBy: v.string(),
+		source: v.optional(submissionSourceValidator),
+		submittedBy: v.optional(v.string()),
 		status: submissionStatusValidator,
 		resolvedYtChannelId: v.optional(v.string()),
 		channelId: v.optional(v.id("channels")),

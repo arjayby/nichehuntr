@@ -126,6 +126,7 @@ function SubmissionsTable() {
 				<thead>
 					<tr className="border-border border-b text-left text-muted-foreground text-xs">
 						<th className="px-4 py-2 font-medium">Input</th>
+						<th className="px-4 py-2 font-medium">Source</th>
 						<th className="px-4 py-2 font-medium">Status</th>
 						<th className="px-4 py-2 font-medium">Outcome</th>
 						<th className="px-4 py-2 text-right font-medium">
@@ -143,6 +144,9 @@ function SubmissionsTable() {
 							>
 								<td className="max-w-xs truncate px-4 py-3 font-mono text-xs">
 									{row.rawInput}
+								</td>
+								<td className="px-4 py-3">
+									<SourceBadge source={row.source} />
 								</td>
 								<td className="px-4 py-3">
 									<StatusBadge status={row.status} />
@@ -230,6 +234,27 @@ function RefreshButton({ submissionId }: { submissionId: Id<"submissions"> }) {
 	);
 }
 
+/** The shared pill shape behind the Source and Status columns — one border/text
+ * tone fed in per badge. Keeps the two columns visually identical by construction. */
+function Badge({
+	tone,
+	children,
+}: {
+	tone: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<span
+			className={cn(
+				"inline-flex items-center rounded-full border px-2 py-0.5 text-xs",
+				tone,
+			)}
+		>
+			{children}
+		</span>
+	);
+}
+
 const STATUS_STYLES: Record<SubmissionRow["status"], string> = {
 	pending: "border-border text-muted-foreground",
 	processing: "border-primary/40 text-primary",
@@ -245,16 +270,23 @@ const STATUS_LABELS: Record<SubmissionRow["status"], string> = {
 };
 
 function StatusBadge({ status }: { status: SubmissionRow["status"] }) {
-	return (
-		<span
-			className={cn(
-				"inline-flex items-center rounded-full border px-2 py-0.5 text-xs",
-				STATUS_STYLES[status],
-			)}
-		>
-			{STATUS_LABELS[status]}
-		</span>
-	);
+	return <Badge tone={STATUS_STYLES[status]}>{STATUS_LABELS[status]}</Badge>;
+}
+
+const SOURCE_STYLES: Record<SubmissionRow["source"], string> = {
+	admin: "border-border text-muted-foreground",
+	scout: "border-primary/40 text-primary",
+};
+
+const SOURCE_LABELS: Record<SubmissionRow["source"], string> = {
+	admin: "Admin",
+	scout: "Scout",
+};
+
+/** Which front door a Submission came through: an Admin paste or the automated
+ * Scout (ADR-0008). A manual boost vs. the primary intake at a glance. */
+function SourceBadge({ source }: { source: SubmissionRow["source"] }) {
+	return <Badge tone={SOURCE_STYLES[source]}>{SOURCE_LABELS[source]}</Badge>;
 }
 
 const OUTCOME_STAGE_LABELS = {
