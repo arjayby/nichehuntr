@@ -155,13 +155,37 @@ export type EnrichmentInput = {
 };
 
 /**
+ * A Niche Query the Enrichment pass mints from a Channel's niche: a search phrase
+ * plus whether it names the Channel's own niche (`seeded`) or an adjacent one
+ * (`adjacent`). Internal Scout fuel (CONTEXT.md: Niche Query) — never rendered.
+ * Kept as a plain literal union so this module stays dependency-free; the DB write
+ * path narrows it to the `mintedNicheQueryOriginValidator` origin set.
+ */
+export type EnrichmentNicheQuery = {
+	phrase: string;
+	origin: "seeded" | "adjacent";
+};
+
+/**
+ * What the multimodal Enrichment call returns for one Channel: the Clonability
+ * signals plus the Niche Query phrases minted from its own and adjacent niches.
+ * Bundling both means a single Claude call powers both Clonability scoring and the
+ * Scout's query pool (ADR-0008).
+ */
+export type EnrichmentResult = {
+	signals: Signals;
+	nicheQueries: EnrichmentNicheQuery[];
+};
+
+/**
  * The seam the enrich action depends on. The real implementation makes a multimodal
  * Claude call (`enrichment.ts`); tests pass a stub so no network is hit — mirroring
  * the embeddings adapter.
  */
 export type EnrichmentAdapter = {
-	/** Score a short-form Channel from its metadata + thumbnails. */
-	enrich(input: EnrichmentInput): Promise<Signals>;
+	/** Score a short-form Channel and mint its Niche Queries from metadata +
+	 * thumbnails, in one multimodal call. */
+	enrich(input: EnrichmentInput): Promise<EnrichmentResult>;
 };
 
 /** NUL — it can't occur in channel metadata, so joining fingerprint fields with
@@ -170,14 +194,27 @@ export type EnrichmentAdapter = {
 const FINGERPRINT_SEPARATOR = String.fromCharCode(0);
 
 /**
- * A deterministic fingerprint of a Channel's enrichment inputs. The enrich
- * follow-up re-runs a Channel only when this changes (CONTEXT.md: "re-runs on material
- * change") — so an edited title, a swapped thumbnail, or a new upload triggers a
- * refresh, while an unchanged Channel stays cached. Bounded because the caller
- * caps how many videos it folds in.
+ * Version tag baked into every fingerprint. Bump this whenever the enrichment
+ * output changes in a way that should invalidate cached scores even if a
+ * Channel's inputs are byte-for-byte unchanged: a version change makes every
+ * previously stored fingerprint mismatch, so channels re-enrich rather than skip
+ * as unchanged. Bumped to `v2` when Enrichment began also minting Niche Queries
+ * (ADR-0008), so the launch sweep re-runs already-enriched Channels and seeds the
+ * pool from the existing Feed.
+ */
+export const ENRICHMENT_FINGERPRINT_VERSION = "v2";
+
+/**
+ * A deterministic fingerprint of a Channel's enrichment inputs, prefixed with the
+ * output-version tag. The enrich follow-up re-runs a Channel only when this
+ * changes (CONTEXT.md: "re-runs on material change") — so an edited title, a
+ * swapped thumbnail, a new upload, or a version bump triggers a refresh, while an
+ * unchanged Channel on the current version stays cached. Bounded because the
+ * caller caps how many videos it folds in.
  */
 export function buildEnrichmentFingerprint(input: EnrichmentInput): string {
 	const parts = [
+		ENRICHMENT_FINGERPRINT_VERSION,
 		input.channelTitle.trim(),
 		(input.channelDescription ?? "").trim(),
 		...input.videos.map(

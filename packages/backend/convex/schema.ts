@@ -3,6 +3,7 @@ import { v } from "convex/values";
 
 import {
 	formValidator,
+	nicheQueryOriginValidator,
 	signalsValidator,
 	sourceValidator,
 	stageValidator,
@@ -166,4 +167,23 @@ export default defineSchema({
 		outcome: v.optional(submissionOutcomeValidator),
 		failureReason: v.optional(v.string()),
 	}),
+
+	// The Scout's Niche Query pool (CONTEXT.md: Niche Query, ADR-0008): free-text
+	// search phrases the Scout will run against the YouTube Data API to harvest
+	// candidate Channels. Purely internal Scout fuel — never rendered, never
+	// filterable, not a taxonomy. Minted as a side effect of Enrichment (a visible
+	// Channel's own niche as `seeded`, neighboring niches as `adjacent`) and, in a
+	// later slice, the Scout's `wildcat` call. `phrase` is the normalized form
+	// (trimmed, lowercased, inner whitespace collapsed) so a case/whitespace-only
+	// variant dedupes to a single row via `by_phrase`. `consecutiveZeroYield`
+	// counts consecutive Scout runs that harvested no unseen Channel; re-minting an
+	// existing phrase revives it by resetting that counter, giving a phrase the
+	// Scout was retiring another chance. `lastRunAt` is unset until the Scout first
+	// runs it; created-at is the built-in `_creationTime`.
+	searchQueries: defineTable({
+		phrase: v.string(),
+		origin: nicheQueryOriginValidator,
+		lastRunAt: v.optional(v.number()),
+		consecutiveZeroYield: v.number(),
+	}).index("by_phrase", ["phrase"]),
 });

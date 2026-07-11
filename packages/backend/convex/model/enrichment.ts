@@ -20,6 +20,8 @@ import {
 	CHANNEL_SIGNAL_NAMES,
 	type EnrichmentAdapter,
 	type EnrichmentInput,
+	type EnrichmentNicheQuery,
+	type EnrichmentResult,
 	SIGNAL_DEFINITIONS,
 	SIGNAL_LABELS,
 	type Signals,
@@ -42,11 +44,20 @@ const MAX_TITLES = 8;
 /** Longest channel description folded into the prompt — bounds tokens. */
 const MAX_DESCRIPTION_CHARS = 500;
 
-/** A handful of short {score, rationale} objects need little generation. */
+/** A handful of short {score, rationale} objects plus a few query phrases need
+ * little generation. */
 const MAX_TOKENS = 1024;
 
+/** How many own-niche (`seeded`) query phrases to ask the model for — the pool's
+ * primary fuel (CONTEXT.md: Niche Query). Also caps how many we keep. */
+const OWN_NICHE_QUERY_LIMIT = 3;
+
+/** How many adjacent-niche (`adjacent`) query phrases to ask for and keep — the
+ * outside-the-echo-chamber slice. */
+const ADJACENT_NICHE_QUERY_LIMIT = 2;
+
 const SYSTEM_PROMPT =
-	"You assess a short-form YouTube channel as a *clone target*: how attractive it would be for an operator to build a new channel replicating its proven niche and format (not to buy it). Judge only Automatable, Transformative, and Improvable, grounded in the channel metadata, recent Shorts titles, and thumbnail images provided. Be decisive and concise. Always report via the record_signals tool.";
+	"You assess a short-form YouTube channel as a *clone target*: how attractive it would be for an operator to build a new channel replicating its proven niche and format (not to buy it). Judge only Automatable, Transformative, and Improvable, grounded in the channel metadata, recent Shorts titles, and thumbnail images provided. You also propose YouTube search phrases that would surface other channels in the same and adjacent niches, to seed automated discovery. Be decisive and concise. Always report via the record_signals tool.";
 
 export type EnrichmentOptions = {
 	/** Override the model id (defaults to a cheap multimodal tier). */
@@ -54,9 +65,11 @@ export type EnrichmentOptions = {
 };
 
 /**
- * JSON Schema for the record_signals tool, built from the Channel signal set.
- * Score bounds live in the descriptions and are clamped downstream, since strict
- * structured schemas don't support numeric min/max.
+ * JSON Schema for the record_signals tool: the per-signal {score, rationale}
+ * objects plus the Niche Query phrase arrays (own-niche `seeded` and adjacent
+ * `adjacent`). Score bounds live in the descriptions and are clamped downstream,
+ * since strict structured schemas don't support numeric min/max; phrase counts
+ * are likewise clamped downstream.
  */
 function signalsSchema() {
 	const properties: Record<string, unknown> = {};
@@ -77,10 +90,24 @@ function signalsSchema() {
 			additionalProperties: false,
 		};
 	}
+	properties.ownNicheQueries = {
+		type: "array",
+		items: { type: "string" },
+		description: `${OWN_NICHE_QUERY_LIMIT} YouTube search phrases that would surface OTHER channels in THIS channel's own niche and format. Concrete and searchable (e.g. "ai horror shorts", "reddit story narration"), not abstract labels.`,
+	};
+	properties.adjacentNicheQueries = {
+		type: "array",
+		items: { type: "string" },
+		description: `${ADJACENT_NICHE_QUERY_LIMIT} YouTube search phrases for ADJACENT niches an operator might also clone — neighboring content spaces, not identical to this channel's.`,
+	};
 	return {
 		type: "object" as const,
 		properties,
-		required: [...CHANNEL_SIGNAL_NAMES],
+		required: [
+			...CHANNEL_SIGNAL_NAMES,
+			"ownNicheQueries",
+			"adjacentNicheQueries",
+		],
 		additionalProperties: false,
 	};
 }
@@ -112,8 +139,48 @@ function buildUserText(input: EnrichmentInput): string {
 		...CHANNEL_SIGNAL_NAMES.map(
 			(name) => `- ${SIGNAL_LABELS[name]}: ${SIGNAL_DEFINITIONS[name]}`,
 		),
+		"",
+		`Also propose ${OWN_NICHE_QUERY_LIMIT} search phrases for this channel's own niche (ownNicheQueries) and ${ADJACENT_NICHE_QUERY_LIMIT} for adjacent niches (adjacentNicheQueries), as an operator would type them into YouTube search.`,
 	);
 	return lines.join("\n");
+}
+
+/**
+ * Coerce a tool-call array field into cleaned Niche Query phrases with the given
+ * origin: keep only non-empty strings, trim them, drop case-insensitive
+ * duplicates within the array, and cap the count. Canonical normalization and
+ * cross-Channel dedupe happen later in the DB write path (`mintNicheQuery`); this
+ * just maps the model output into the typed shape.
+ */
+function collectNicheQueries(
+	raw: unknown,
+	origin: EnrichmentNicheQuery["origin"],
+	limit: number,
+): EnrichmentNicheQuery[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+	const seen = new Set<string>();
+	const queries: EnrichmentNicheQuery[] = [];
+	for (const item of raw) {
+		if (typeof item !== "string") {
+			continue;
+		}
+		const phrase = item.trim();
+		if (phrase.length === 0) {
+			continue;
+		}
+		const key = phrase.toLowerCase();
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		queries.push({ phrase, origin });
+		if (queries.length >= limit) {
+			break;
+		}
+	}
+	return queries;
 }
 
 /**
@@ -159,7 +226,7 @@ export function createAnthropicEnrichmentAdapter(
 ): EnrichmentAdapter {
 	const model = opts.model ?? DEFAULT_MODEL;
 	return {
-		async enrich(input): Promise<Signals> {
+		async enrich(input): Promise<EnrichmentResult> {
 			const thumbnails = input.videos
 				.map((video) => video.thumbnailUrl)
 				.filter((url): url is string => Boolean(url))
@@ -199,7 +266,22 @@ export function createAnthropicEnrichmentAdapter(
 			if (!toolUse) {
 				throw new Error("enrichment: model did not return record_signals");
 			}
-			return normalizeSignals(toolUse.input);
+			const raw = (toolUse.input ?? {}) as Record<string, unknown>;
+			return {
+				signals: normalizeSignals(raw),
+				nicheQueries: [
+					...collectNicheQueries(
+						raw.ownNicheQueries,
+						"seeded",
+						OWN_NICHE_QUERY_LIMIT,
+					),
+					...collectNicheQueries(
+						raw.adjacentNicheQueries,
+						"adjacent",
+						ADJACENT_NICHE_QUERY_LIMIT,
+					),
+				],
+			};
 		},
 	};
 }

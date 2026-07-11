@@ -24,14 +24,19 @@
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import type { ActionCtx } from "./_generated/server";
-import { internalMutation, internalQuery } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
+import {
+	internalAction,
+	internalMutation,
+	internalQuery,
+} from "./_generated/server";
 import {
 	channelEnrichmentFor,
 	upsertChannelEnrichment,
 } from "./model/channelEnrichment";
 import {
+	type DerivedChannelLifecycle,
 	deriveChannelLifecycle,
 	lifecycleVideoFromStoredVideo,
 	SHORT_MAX_SEC,
@@ -42,13 +47,51 @@ import {
 	type EnrichmentInput,
 	type EnrichmentVideo,
 } from "./model/clonability";
-import { signalsValidator } from "./model/validators";
+import { mintNicheQuery } from "./model/nicheQueries";
+import {
+	mintedNicheQueryValidator,
+	signalsValidator,
+} from "./model/validators";
 
 /** Recent uploads scanned for a channel before filtering to Shorts. */
 const ENRICH_VIDEO_SCAN = 200;
 
 /** Recent Shorts folded into the enrichment input (titles + thumbnails). */
 const ENRICH_VIDEO_WINDOW = 6;
+
+/**
+ * Load a Channel's recent uploads and derive its current lifecycle — the shared
+ * spine of both the per-Channel enrich target and the launch sweep, so the two
+ * decide "visible" from one code path rather than two drifting copies. Returns
+ * the scanned videos too, since the enrich target still needs them to build the
+ * short-form input window.
+ */
+async function loadChannelLifecycle(
+	ctx: QueryCtx,
+	channel: Doc<"channels">,
+): Promise<{ recent: Doc<"videos">[]; lifecycle: DerivedChannelLifecycle }> {
+	const recent = await ctx.db
+		.query("videos")
+		.withIndex("by_channel_and_publishedAt", (q) =>
+			q.eq("channelId", channel._id),
+		)
+		.order("desc")
+		.take(ENRICH_VIDEO_SCAN);
+	const lifecycle = deriveChannelLifecycle({
+		subscriberCount: channel.subscriberCount ?? 0,
+		videos: recent.map(lifecycleVideoFromStoredVideo),
+		now: Date.now(),
+	});
+	return { recent, lifecycle };
+}
+
+/** Whether a derived lifecycle puts the Channel on the Feed — the single visible
+ * predicate the enrich target and the launch sweep share (mirrors feed.ts). */
+function isFeedVisible(lifecycle: DerivedChannelLifecycle): boolean {
+	return (
+		lifecycle.feedVisibility === "visible" && lifecycle.stage !== "tracked"
+	);
+}
 
 /**
  * The outcome of a single-Channel enrich run, surfaced for logs. `skipped`
@@ -81,23 +124,8 @@ export const buildChannelEnrichmentTarget = internalQuery({
 			return null;
 		}
 
-		const recent = await ctx.db
-			.query("videos")
-			.withIndex("by_channel_and_publishedAt", (q) =>
-				q.eq("channelId", channel._id),
-			)
-			.order("desc")
-			.take(ENRICH_VIDEO_SCAN);
-
-		const lifecycle = deriveChannelLifecycle({
-			subscriberCount: channel.subscriberCount ?? 0,
-			videos: recent.map(lifecycleVideoFromStoredVideo),
-			now: Date.now(),
-		});
-		if (
-			lifecycle.feedVisibility === "hidden" ||
-			lifecycle.stage === "tracked"
-		) {
+		const { recent, lifecycle } = await loadChannelLifecycle(ctx, channel);
+		if (!isFeedVisible(lifecycle)) {
 			return null;
 		}
 
@@ -134,22 +162,33 @@ export const buildChannelEnrichmentTarget = internalQuery({
 });
 
 /**
- * Persist one Channel's freshly scored signals, upserted by Channel. Feed and
- * detail reads use this cache directly; enrichment never rewrites lifecycle data.
+ * Persist one Channel's freshly scored signals and mint its Niche Queries into
+ * the Scout's pool, in one transaction (ADR-0008). Feed and detail reads use the
+ * signals cache directly; enrichment never rewrites lifecycle data. The minted
+ * phrases are internal Scout fuel — deduped case-insensitively by
+ * `mintNicheQuery`, so re-enriching a Channel that mints the same phrase revives
+ * it rather than duplicating it.
  */
 export const applyChannelEnrichment = internalMutation({
 	args: {
 		channelId: v.id("channels"),
 		signals: signalsValidator,
 		fingerprint: v.string(),
+		nicheQueries: v.array(mintedNicheQueryValidator),
 	},
-	handler: async (ctx, { channelId, signals, fingerprint }): Promise<null> => {
+	handler: async (
+		ctx,
+		{ channelId, signals, fingerprint, nicheQueries },
+	): Promise<null> => {
 		await upsertChannelEnrichment(ctx, {
 			channelId,
 			signals,
 			fingerprint,
 			enrichedAt: Date.now(),
 		});
+		for (const query of nicheQueries) {
+			await mintNicheQuery(ctx, query);
+		}
 		return null;
 	},
 });
@@ -178,9 +217,9 @@ export async function runEnrichChannel(
 		return { status: "skipped" };
 	}
 
-	let signals: Awaited<ReturnType<EnrichmentAdapter["enrich"]>>;
+	let result: Awaited<ReturnType<EnrichmentAdapter["enrich"]>>;
 	try {
-		signals = await adapter.enrich(target.input);
+		result = await adapter.enrich(target.input);
 	} catch (error) {
 		console.error(`enrich failed for channel ${channelId}:`, error);
 		return { status: "failed" };
@@ -188,8 +227,73 @@ export async function runEnrichChannel(
 
 	await ctx.runMutation(internal.enrich.applyChannelEnrichment, {
 		channelId,
-		signals,
+		signals: result.signals,
 		fingerprint: target.fingerprint,
+		nicheQueries: result.nicheQueries,
 	});
 	return { status: "enriched" };
 }
+
+// --- One-time launch sweep (seeds the Niche Query pool) ------------------------
+
+/** Safety cap on channels scanned by the one-time launch sweep. Independent of
+ * the Feed's own read cap — the visibility *decision* is shared through
+ * `loadChannelLifecycle`/`isFeedVisible`; this only bounds how many channels the
+ * sweep walks in a single pass. */
+const SWEEP_CHANNEL_SCAN = 500;
+
+/**
+ * The ids of every currently Feed-visible Channel, recomputing visibility from
+ * live DB state exactly as the Feed does. Backs the one-time launch sweep so it
+ * spends Anthropic budget only on visible Channels; hidden Tracked Channels are
+ * excluded and never scheduled.
+ */
+export const listVisibleChannelIds = internalQuery({
+	args: {},
+	handler: async (ctx): Promise<Id<"channels">[]> => {
+		const channels = await ctx.db
+			.query("channels")
+			.order("desc")
+			.take(SWEEP_CHANNEL_SCAN);
+
+		const visible: Id<"channels">[] = [];
+		for (const channel of channels) {
+			const { lifecycle } = await loadChannelLifecycle(ctx, channel);
+			if (isFeedVisible(lifecycle)) {
+				visible.push(channel._id);
+			}
+		}
+		return visible;
+	},
+});
+
+/**
+ * One-time launch sweep — run out-of-band via
+ * `convex run enrich:seedNicheQueryPool`, the same escape hatch as the admin
+ * bootstrap. Schedules the standard single-Channel Enrichment worker for every
+ * currently Feed-visible Channel, seeding the Niche Query pool from the existing
+ * Feed. Only visible Channels are scheduled, so hidden Tracked Channels spend no
+ * Anthropic budget. Because the fingerprint version was bumped, already-enriched
+ * Channels re-run rather than skip. Safe to re-run: each worker re-checks
+ * visibility and fingerprint, so a second sweep is a no-op once the pool is
+ * seeded. Returns the number of Channels scheduled.
+ */
+export const seedNicheQueryPool = internalAction({
+	args: {},
+	handler: async (ctx): Promise<{ scheduled: number }> => {
+		// Same-file runQuery — annotate the result per Convex guidelines so the
+		// action's type doesn't depend on inference across the function boundary.
+		const channelIds: Id<"channels">[] = await ctx.runQuery(
+			internal.enrich.listVisibleChannelIds,
+			{},
+		);
+		for (const channelId of channelIds) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.enrichChannel.enrichChannelWorker,
+				{ channelId },
+			);
+		}
+		return { scheduled: channelIds.length };
+	},
+});
