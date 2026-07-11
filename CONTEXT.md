@@ -37,21 +37,29 @@ The Operator's flat, private grouping inside the [[Watchlist]] — a named bucke
 _Avoid_: Tag, label, category, collection.
 
 **Admin**:
-A privileged operator authorized to submit [[Channel]]s into the [[Feed]]. Distinct from the [[Operator]] paywall — admin is a separate authorization axis (a role, not a subscription), and an Admin need not hold an active subscription to submit. Membership lives in a local role table keyed by the auth user id, granted by email, and bootstrapped once out-of-band. See ADR-0005.
+A privileged operator authorized to submit [[Channel]]s into the [[Feed]]. Distinct from the [[Operator]] paywall — admin is a separate authorization axis (a role, not a subscription), and an Admin need not hold an active subscription to submit. Membership lives in a local role table keyed by the auth user id, granted by email, and bootstrapped once out-of-band. Since the [[Scout]] became the primary front door, manual admin submission is a manual-boost path rather than the sole intake, and the admin surface doubles as the Scout's observability view. See ADR-0005, ADR-0008.
 _Avoid_: Superuser, moderator, owner.
 
 **Submission**:
-An [[Admin]]'s request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. Replaces automated discovery (ADR-0005) as the sole way a channel enters the system. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel; refreshing a tracked channel creates a new Submission for the same channel, making Submissions the only refresh path for channel stats.
+An [[Admin]]'s _or the [[Scout]]'s_ request to bring a [[Channel]] into the [[Feed]], together with its ingestion outcome. The sole intake record: whichever front door a channel comes through, it enters as a Submission, and it remembers which one. Carries a status lifecycle: _pending_ → _processing_ → _tracked_ or _failed_. Crucially, a channel that ingests but fails the [[Proven]] gate is **tracked, not failed** — the Admin submits candidates; the app decides the lifecycle. `failed` means the paste wouldn't resolve to a channel or the API errored (retryable). A resolved-and-tracked Submission is idempotent per channel; refreshing a tracked channel creates a new Submission for the same channel, making Submissions the only refresh path for channel stats.
 _Avoid_: Queue, request, candidate.
 
 **Tracked**:
 A channel that has been ingested and remains in the shared dataset, whether or not it currently qualifies for a lifecycle column. Tracked channels that miss the lifecycle rules are hidden from the Feed rather than treated as failed submissions. A channel can be Tracked before [[Enrichment]] finishes; enrichment failure does not make a Submission fail.
 _Avoid_: Failed, rejected.
 
+**Scout**:
+The automated discoverer that is the [[Feed]]'s primary front door. On a cron it runs seeded searches against the official YouTube Data API v3 — queries drawn from the [[Niche Query]] phrases of already-visible [[Channel]]s, plus an exploration slice — harvests unseen channels, and creates ordinary [[Submission]]s through the unchanged [[Discovery pipeline]]. It submits candidates; the lifecycle gates still decide visibility, so automated volume can never flood the Feed. Distinct from the [[Admin]], whose manual paste is now a manual-boost path beside the Scout. See ADR-0008.
+_Avoid_: Crawler, hunter, bot, scraper.
+
+**Niche Query**:
+A free-text search phrase the [[Scout]] runs to find candidate [[Channel]]s. Minted only as a side effect of [[Enrichment]] (plus an occasional unseeded proposal), from the [[Niche]] of a visible Channel. Purely internal Scout fuel: never rendered, never filterable, and not a taxonomy — it does not classify or group channels. Reaffirms the [[Niche]] stance that duplicate cards in a niche are themselves the signal that the niche is hot.
+_Avoid_: Tag, category, keyword filter, niche label.
+
 ## Discovery pipeline
 
-The admin-triggered path that turns a [[Submission]] into a [[Tracked]] [[Channel]] with current short-form uploads, lifecycle evidence, and, when visible, [[Enrichment]] signals. It starts when an [[Admin]] submits a channel and is not driven by cron upkeep.
-_Avoid_: Automated discovery, scheduled discovery.
+The path that turns a [[Submission]] into a [[Tracked]] [[Channel]] with current short-form uploads, lifecycle evidence, and, when visible, [[Enrichment]] signals. It has two triggers: an [[Admin]] pasting a channel, and a [[Scout]] cron that creates Submissions from seeded searches. Refresh of a tracked channel stays admin-triggered; there is no cron that refreshes, snapshots, or re-enriches on a schedule.
+_Avoid_: Automated refresh, scheduled upkeep.
 
 The three columns are a left-to-right **channel lifecycle**: a channel's position is a function of its recent short-form reach and channel maturity, so the Operator can time their clone. It is _not_ three independent sorted feeds.
 
