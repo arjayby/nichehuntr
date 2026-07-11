@@ -21,6 +21,15 @@ export const sourceValidator = v.union(
 	v.literal("admin"),
 );
 
+/** Which front door a Submission came through (CONTEXT.md: Submission, ADR-0008):
+ * an `admin` paste (the manual-boost path) or the automated `scout`. Distinct
+ * from `sourceValidator`, which records how a *Channel* was discovered. Kept as a
+ * closed set so a new front door is a deliberate schema change. */
+export const submissionSourceValidator = v.union(
+	v.literal("admin"),
+	v.literal("scout"),
+);
+
 /** A Submission's lifecycle (ADR-0005/0006, CONTEXT.md): `pending` on insert,
  * `processing` while the worker backfills, then `tracked` (ingested, whether
  * visible on the Feed or not) or `failed` (unresolvable paste / API error). */
@@ -55,6 +64,7 @@ export const submissionOutcomeValidator = v.union(
  * the schema and can't drift from these validators. */
 export type SubmissionStatus = Infer<typeof submissionStatusValidator>;
 export type SubmissionOutcome = Infer<typeof submissionOutcomeValidator>;
+export type SubmissionSource = Infer<typeof submissionSourceValidator>;
 
 /** One AI-derived Clonability signal: a 0–100 score plus a one-line rationale. */
 export const signalValidator = v.object({

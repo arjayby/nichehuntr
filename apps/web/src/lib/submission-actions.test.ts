@@ -20,6 +20,7 @@ function row(overrides: Partial<SubmissionRow>): SubmissionRow {
 		_id: id("sub_default"),
 		_creationTime: 0,
 		rawInput: "UCdefault",
+		source: "admin",
 		status,
 		resolvedYtChannelId: status === "tracked" ? "UCdefault" : null,
 		channelId: null,

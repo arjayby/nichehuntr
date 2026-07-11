@@ -35,7 +35,11 @@ import {
 	lifecycleVideoFromStoredVideo,
 } from "./model/channelLifecycle";
 import { resolveChannelRef } from "./model/submissions";
-import type { SubmissionOutcome, SubmissionStatus } from "./model/validators";
+import type {
+	SubmissionOutcome,
+	SubmissionSource,
+	SubmissionStatus,
+} from "./model/validators";
 import type { YouTubeAdapter } from "./model/youtube";
 
 /** Uploads a single Submission backfills: up to the latest 50 Shorts, giving the
@@ -55,6 +59,7 @@ export type SubmissionRow = {
 	_id: Id<"submissions">;
 	_creationTime: number;
 	rawInput: string;
+	source: SubmissionSource;
 	status: SubmissionStatus;
 	resolvedYtChannelId: string | null;
 	channelId: Id<"channels"> | null;
@@ -108,6 +113,7 @@ export const submitChannel = mutation({
 		}
 		const submissionId = await ctx.db.insert("submissions", {
 			rawInput: trimmed,
+			source: "admin",
 			submittedBy: admin._id,
 			status: "pending",
 		});
@@ -133,6 +139,9 @@ export const listSubmissions = query({
 			_id: row._id,
 			_creationTime: row._creationTime,
 			rawInput: row.rawInput,
+			// Pre-Scout rows predate `source`; they were all admin pastes, so a
+			// missing source reads as `admin` (schema comment).
+			source: row.source ?? "admin",
 			status: row.status,
 			resolvedYtChannelId: row.resolvedYtChannelId ?? null,
 			channelId: row.channelId ?? null,
@@ -149,6 +158,12 @@ export const listSubmissions = query({
  * `failed` Submissions are retryable (a `pending`/`processing` one is already in
  * flight, a `tracked` one uses re-submission to refresh); anything else is
  * `NOT_RETRYABLE`. No automatic retry/backoff — this is manual only (ADR-0005).
+ *
+ * Retry reuses the existing row, so it preserves that row's `source` rather than
+ * re-stamping `admin`: a failed Submission keeps whichever front door it came
+ * through (so a retried Scout row stays `scout` once the Scout can submit). Today
+ * only `admin` pastes and Refreshes can reach `failed`, so a retried row is
+ * `admin` in practice.
  */
 export const retrySubmission = mutation({
 	args: { submissionId: v.id("submissions") },
@@ -203,6 +218,7 @@ export const refreshSubmission = mutation({
 		}
 		const newSubmissionId = await ctx.db.insert("submissions", {
 			rawInput: resolvedYtChannelId,
+			source: "admin",
 			submittedBy: admin._id,
 			status: "pending",
 		});

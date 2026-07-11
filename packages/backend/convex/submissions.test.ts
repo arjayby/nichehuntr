@@ -794,7 +794,11 @@ describe("refreshSubmission — start a fresh Submission for a tracked Channel",
 		expect(newId).not.toEqual(trackedId);
 
 		const row = await t.run((ctx) => ctx.db.get("submissions", newId));
-		expect(row).toMatchObject({ status: "pending", rawInput: id });
+		expect(row).toMatchObject({
+			status: "pending",
+			rawInput: id,
+			source: "admin", // a Refresh is a fresh admin-sourced Submission
+		});
 
 		const scheduled = await scheduledFunctions(t);
 		const workerJobs = scheduled.filter((job) =>
@@ -1020,6 +1024,7 @@ describe("retrySubmission — one-click retry of a failed Submission", () => {
 		const submissionId = await t.run((ctx) =>
 			ctx.db.insert("submissions", {
 				rawInput: ucId("failed"),
+				source: "admin",
 				submittedBy: "someone",
 				status: "failed",
 				failureReason: "YouTube API error — try again.",
@@ -1031,6 +1036,8 @@ describe("retrySubmission — one-click retry of a failed Submission", () => {
 		const row = await submissionRow(admin, submissionId);
 		expect(row?.status).toBe("pending");
 		expect(row?.failureReason).toBeNull();
+		// Retry reuses the row, so it keeps the source it came in with (admin here).
+		expect(row?.source).toBe("admin");
 
 		// The worker was scheduled to re-run this exact Submission in the background.
 		const scheduled = await t.run((ctx) =>
@@ -1039,6 +1046,27 @@ describe("retrySubmission — one-click retry of a failed Submission", () => {
 		expect(scheduled).toHaveLength(1);
 		expect(scheduled[0]?.name).toMatch(/submissionWorker/);
 		expect(scheduled[0]?.args).toEqual([{ submissionId }]);
+	});
+
+	it("preserves a scout-sourced row's source on retry rather than re-stamping admin", async () => {
+		// Once the Scout can submit, a failed Scout row that's retried must stay
+		// `scout` — Retry reuses the row, it never rewrites which front door it came
+		// through. Pins that the admin-gated action doesn't launder the source.
+		const { t, admin } = await setup();
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("scoutfail"),
+				source: "scout",
+				status: "failed",
+				failureReason: "YouTube API error — try again.",
+			}),
+		);
+
+		await admin.mutation(api.submissions.retrySubmission, { submissionId });
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.status).toBe("pending");
+		expect(row?.source).toBe("scout");
 	});
 
 	it("rejects retrying a Submission that isn't failed", async () => {
@@ -1102,6 +1130,7 @@ describe("submitChannel — accepts instantly, ingests in the background", () =>
 		expect(row).toMatchObject({
 			status: "pending",
 			rawInput: ucId("bg"), // trimmed
+			source: "admin", // the manual-boost front door stamps admin
 		});
 	});
 
@@ -1110,6 +1139,40 @@ describe("submitChannel — accepts instantly, ingests in the background", () =>
 		await expect(
 			admin.mutation(api.submissions.submitChannel, { rawInput: "   " }),
 		).rejects.toThrow(/EMPTY_INPUT/);
+	});
+});
+
+describe("Submission source — the front-door badge (issue #77)", () => {
+	it("surfaces a scout-sourced row's source so the admin table can badge it", async () => {
+		const { t, admin } = await setup();
+		// A Scout Submission has no submitting user and is stamped `scout` — the
+		// prefactor shape the Scout will write directly.
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("scout"),
+				source: "scout",
+				status: "pending",
+			}),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.source).toBe("scout");
+	});
+
+	it("reads a pre-Scout row (no source) as admin — widen-style, no breakage", async () => {
+		const { t, admin } = await setup();
+		// A row written before `source` existed: still valid, and the admin table
+		// treats the missing source as the manual paste it must have been.
+		const submissionId = await t.run((ctx) =>
+			ctx.db.insert("submissions", {
+				rawInput: ucId("legacy"),
+				submittedBy: "someone",
+				status: "pending",
+			}),
+		);
+
+		const row = await submissionRow(admin, submissionId);
+		expect(row?.source).toBe("admin");
 	});
 });
 
