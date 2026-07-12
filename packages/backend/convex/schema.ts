@@ -185,5 +185,30 @@ export default defineSchema({
 		origin: nicheQueryOriginValidator,
 		lastRunAt: v.optional(v.number()),
 		consecutiveZeroYield: v.number(),
-	}).index("by_phrase", ["phrase"]),
+	})
+		.index("by_phrase", ["phrase"])
+		// The Scout picks each run's queries least-recently-run first. A never-run
+		// phrase (unset `lastRunAt`) sorts before any timestamp on this index, so
+		// ascending order yields never-run queries first, then the stalest — exactly
+		// the LRU slice, and bounded by `.take(queriesPerRun)` (ADR-0008).
+		.index("by_lastRunAt", ["lastRunAt"]),
+
+	// The Scout's per-run heartbeat (CONTEXT.md: Scout, ADR-0008): one row per run,
+	// the observability signal that distinguishes a dead Scout from a quiet day.
+	// `startedAt` is stamped when the run begins and `finishedAt` when it settles
+	// (unset while in flight or if the process dies mid-run). The counters record
+	// what the run did: `queriesUsed` searched, `candidatesSeen` harvested from
+	// search before filtering, `channelsSubmitted` turned into Submissions, and
+	// `estimatedQuotaUnits` the rough YouTube quota it cost. `error` is set only
+	// when an aborting failure (e.g. quota exhaustion) cut the run short after its
+	// partial counters were tallied. Listed newest-first off `_creationTime`.
+	scoutRuns: defineTable({
+		startedAt: v.number(),
+		finishedAt: v.optional(v.number()),
+		queriesUsed: v.number(),
+		candidatesSeen: v.number(),
+		channelsSubmitted: v.number(),
+		estimatedQuotaUnits: v.number(),
+		error: v.optional(v.string()),
+	}),
 });

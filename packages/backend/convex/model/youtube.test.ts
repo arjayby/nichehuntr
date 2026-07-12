@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { chunk, createYouTubeAdapter, parseIso8601Duration } from "./youtube";
+import {
+	chunk,
+	createYouTubeAdapter,
+	parseIso8601Duration,
+	QuotaExceededError,
+} from "./youtube";
 
 describe("parseIso8601Duration", () => {
 	it.each([
@@ -252,5 +257,119 @@ describe("fetchChannelUploads", () => {
 
 		expect(uploads).toEqual([]);
 		expect(urls).toHaveLength(1); // only the playlistItems page, no videos.list
+	});
+});
+
+describe("searchRecentShorts — the Scout's discovery seam (ADR-0008)", () => {
+	/** A `search.list` fake: records the URL and returns `count` video hits whose
+	 * channel id is derived from the video id. */
+	function searchFetch(urls: string[], count: number): typeof fetch {
+		return (async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			urls.push(url);
+			const items = Array.from({ length: count }, (_, i) => ({
+				id: { videoId: `vid${i}` },
+				snippet: { channelId: `UCchan${i}` },
+			}));
+			return jsonResponse({ items });
+		}) as typeof fetch;
+	}
+
+	it("hits search.list once with the recent-Shorts quota params and returns refs", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", searchFetch(urls, 3));
+		const publishedAfter = Date.parse("2026-06-28T00:00:00Z");
+
+		const refs = await adapter.searchRecentShorts("ai horror shorts", {
+			publishedAfter,
+			maxResults: 50,
+		});
+
+		expect(urls).toHaveLength(1);
+		const url = new URL(urls[0] ?? "");
+		expect(url.pathname.endsWith("/search")).toBe(true);
+		expect(url.searchParams.get("type")).toBe("video");
+		expect(url.searchParams.get("videoDuration")).toBe("short");
+		expect(url.searchParams.get("order")).toBe("viewCount");
+		expect(url.searchParams.get("q")).toBe("ai horror shorts");
+		expect(url.searchParams.get("maxResults")).toBe("50");
+		expect(url.searchParams.get("publishedAfter")).toBe(
+			new Date(publishedAfter).toISOString(),
+		);
+		expect(refs).toEqual([
+			{ ytVideoId: "vid0", ytChannelId: "UCchan0" },
+			{ ytVideoId: "vid1", ytChannelId: "UCchan1" },
+			{ ytVideoId: "vid2", ytChannelId: "UCchan2" },
+		]);
+	});
+
+	it("skips hits missing a video or channel id", async () => {
+		const partialFetch = (async () =>
+			jsonResponse({
+				items: [
+					{ id: { videoId: "ok" }, snippet: { channelId: "UCok" } },
+					{ id: {}, snippet: { channelId: "UCnovideo" } },
+					{ id: { videoId: "nochannel" }, snippet: {} },
+				],
+			})) as typeof fetch;
+		const adapter = createYouTubeAdapter("KEY", partialFetch);
+
+		const refs = await adapter.searchRecentShorts("q", {
+			publishedAfter: 0,
+			maxResults: 50,
+		});
+
+		expect(refs).toEqual([{ ytVideoId: "ok", ytChannelId: "UCok" }]);
+	});
+
+	it("throws QuotaExceededError on a 403 whose body carries quotaExceeded", async () => {
+		const quotaFetch = (async () =>
+			new Response(
+				JSON.stringify({ error: { errors: [{ reason: "quotaExceeded" }] } }),
+				{ status: 403 },
+			)) as typeof fetch;
+		const adapter = createYouTubeAdapter("KEY", quotaFetch);
+
+		await expect(
+			adapter.searchRecentShorts("q", { publishedAfter: 0, maxResults: 50 }),
+		).rejects.toBeInstanceOf(QuotaExceededError);
+	});
+});
+
+describe("hydrateCandidateStats — candidate view counts (ADR-0008)", () => {
+	/** A `videos.list` fake for hydration: records URLs and echoes each id back
+	 * with a channel id and a view count derived from the id. */
+	function statsFetch(urls: string[]): typeof fetch {
+		return (async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			urls.push(url);
+			const ids = new URL(url).searchParams.get("id")?.split(",") ?? [];
+			const items = ids.map((id) => ({
+				id,
+				snippet: { channelId: `UCof_${id}` },
+				statistics: { viewCount: "12345" },
+			}));
+			return jsonResponse({ items });
+		}) as typeof fetch;
+	}
+
+	it("batches ids 50 at a time via videos.list and maps channel + views", async () => {
+		const urls: string[] = [];
+		const adapter = createYouTubeAdapter("KEY", statsFetch(urls));
+		const ids = Array.from({ length: 60 }, (_, i) => `vid${i}`);
+
+		const stats = await adapter.hydrateCandidateStats(ids);
+
+		expect(urls).toHaveLength(2); // 50 + 10, one unit each
+		expect(urls.every((u) => new URL(u).pathname.endsWith("/videos"))).toBe(
+			true,
+		);
+		expect(urls.some((u) => u.includes("/search"))).toBe(false);
+		expect(stats).toHaveLength(60);
+		expect(stats[0]).toEqual({
+			ytVideoId: "vid0",
+			ytChannelId: "UCof_vid0",
+			viewCount: 12345,
+		});
 	});
 });

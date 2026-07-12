@@ -45,10 +45,31 @@ export type ChannelUpload = {
 };
 
 /**
- * The seam the ingestion upkeep and the Submission worker depend on. Real
- * implementation talks to YouTube; tests pass a stub so no network is hit.
- * Automated discovery is gone (ADR-0005): this is channel metadata and
- * `fetchChannelUploads` — the Submission backfill of Shorts.
+ * A raw `search.list` hit before hydration: the candidate video and the channel
+ * that published it. `search.list` returns the channel id in the snippet but no
+ * statistics, so the Scout uses this to drop already-tracked channels *before*
+ * spending a hydration unit on their videos (ADR-0008).
+ */
+export type CandidateRef = {
+	ytVideoId: string;
+	ytChannelId: string;
+};
+
+/** A hydrated candidate video: identity plus the current view count the Scout
+ * ranks unseen channels by. */
+export type CandidateVideoStats = {
+	ytVideoId: string;
+	ytChannelId: string;
+	viewCount: number;
+};
+
+/**
+ * The seam the ingestion upkeep, the Submission worker, and the Scout depend on.
+ * Real implementation talks to YouTube; tests pass a stub so no network is hit.
+ * Channel metadata and `fetchChannelUploads` back the Submission backfill;
+ * `searchRecentShorts` + `hydrateCandidateStats` are the Scout's discovery seam
+ * — the one place this humble adapter deliberately spends `search.list` quota
+ * (ADR-0008 amends ADR-0001's "never search.list" note).
  */
 export type YouTubeAdapter = {
 	fetchChannels(channelIds: string[]): Promise<ChannelInfo[]>;
@@ -60,7 +81,35 @@ export type YouTubeAdapter = {
 	 * channel owns it). The Submission worker's handle-lookup seam — a URL/id paste
 	 * never reaches it. One `channels.list?forHandle` unit. */
 	resolveHandle(handle: string): Promise<string | null>;
+	/**
+	 * Search recent, popular Shorts for a Niche Query — the Scout's discovery seam.
+	 * One `search.list` unit (100 quota): `type=video`, `videoDuration=short`,
+	 * `order=viewCount`, and `publishedAfter` the recent-window cutoff (ms epoch).
+	 * Returns the hits as `{video, channel}` refs — `search.list` carries no
+	 * statistics — so the Scout can drop already-tracked channels before hydrating.
+	 * Throws {@link QuotaExceededError} when the day's quota is exhausted.
+	 */
+	searchRecentShorts(
+		query: string,
+		opts: { publishedAfter: number; maxResults: number },
+	): Promise<CandidateRef[]>;
+	/** Hydrate candidate videos with their current view counts via `videos.list`,
+	 * 50 ids per unit — the Scout ranks unseen channels by these. */
+	hydrateCandidateStats(videoIds: string[]): Promise<CandidateVideoStats[]>;
 };
+
+/**
+ * Thrown when YouTube reports daily quota exhaustion (a `403` whose body carries
+ * the `quotaExceeded` reason). The Scout treats this specially: it aborts the
+ * whole run cleanly rather than skipping a single query, so the failure mode is
+ * fewer searches, not a half-ingested run (PRD user story #15).
+ */
+export class QuotaExceededError extends Error {
+	constructor() {
+		super("YouTube API daily quota exceeded");
+		this.name = "QuotaExceededError";
+	}
+}
 
 /** Split a list into chunks of at most `size` (used to honor the 50-id cap). */
 export function chunk<T>(items: T[], size: number): T[][] {
@@ -111,6 +160,11 @@ type VideoResource = {
 
 type PlaylistItemResource = {
 	contentDetails?: { videoId?: string };
+};
+
+type SearchResultResource = {
+	id?: { videoId?: string };
+	snippet?: { channelId?: string };
 };
 
 type ChannelResource = {
@@ -164,6 +218,13 @@ export function createYouTubeAdapter(
 		url.searchParams.set("key", apiKey);
 		const res = await doFetch(url.toString());
 		if (!res.ok) {
+			// YouTube signals daily quota exhaustion as a `403` carrying a
+			// `quotaExceeded` reason; surface it as a typed error the Scout can abort
+			// the whole run on. Any other failure stays a loud generic throw.
+			const body = await res.text().catch(() => "");
+			if (res.status === 403 && body.includes("quotaExceeded")) {
+				throw new QuotaExceededError();
+			}
 			throw new Error(
 				`YouTube API ${path} failed: ${res.status} ${res.statusText}`,
 			);
@@ -202,6 +263,45 @@ export function createYouTubeAdapter(
 					item.statistics?.hiddenSubscriberCount === true
 						? undefined
 						: toViewCount(item.statistics?.subscriberCount),
+			}));
+		},
+
+		async searchRecentShorts(query, opts): Promise<CandidateRef[]> {
+			// `search.list` is the Scout's one deliberate search spend (100 units). It
+			// carries no statistics, so we return just the video + channel ids and
+			// hydrate view counts separately after tracked channels are filtered out.
+			const body = await get<SearchResultResource>("search", {
+				part: "snippet",
+				type: "video",
+				videoDuration: "short",
+				order: "viewCount",
+				q: query,
+				maxResults: String(opts.maxResults),
+				publishedAfter: new Date(opts.publishedAfter).toISOString(),
+			});
+			const refs: CandidateRef[] = [];
+			for (const item of body.items ?? []) {
+				const ytVideoId = item.id?.videoId;
+				const ytChannelId = item.snippet?.channelId;
+				if (ytVideoId !== undefined && ytChannelId !== undefined) {
+					refs.push({ ytVideoId, ytChannelId });
+				}
+			}
+			return refs;
+		},
+
+		async hydrateCandidateStats(videoIds): Promise<CandidateVideoStats[]> {
+			// One `videos.list` unit per 50 ids (the shared 50-id batching), returning
+			// only what ranking needs: the publishing channel and current view count.
+			const items = await getByIds<VideoResource>(
+				"videos",
+				"snippet,statistics",
+				videoIds,
+			);
+			return items.map((item) => ({
+				ytVideoId: item.id,
+				ytChannelId: item.snippet?.channelId ?? "",
+				viewCount: toViewCount(item.statistics?.viewCount),
 			}));
 		},
 
