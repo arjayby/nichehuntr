@@ -24,7 +24,7 @@
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { ActionCtx } from "./_generated/server";
 import {
 	internalAction,
@@ -34,8 +34,11 @@ import {
 import { liveYouTubeAdapter } from "./ingest";
 import {
 	DEFAULT_SCOUT_CONFIG,
+	isRetired,
+	nextZeroYield,
 	rankCandidateChannels,
 	type ScoutConfig,
+	selectRunQueries,
 } from "./model/scout";
 import {
 	type CandidateRef,
@@ -57,26 +60,68 @@ const INGEST_QUOTA_UNITS = 4;
 
 // --- DB seam (internal mutations & query the orchestration drives) --------------
 
+/** One Niche Query the run will search: its id (to stamp yield afterward) and the
+ * phrase to search for. */
+type PickedQuery = { queryId: Id<"searchQueries">; phrase: string };
+
 /**
- * Open a run: pick this run's Niche Queries least-recently-run first, stamp their
- * `lastRunAt` so the next run rotates to different phrases, and insert the
- * `scoutRuns` heartbeat row. Picking + stamping share one transaction so
- * concurrent runs can't select the same phrases. `lastRunAt` is stamped at pick
- * time (a picked query is a run query), so even a run that later aborts still
- * advances the rotation. Returns the run id and the chosen phrases.
+ * Open a run: pick this run's Niche Queries — the least-recently-run slice split
+ * between `seeded` and exploration (`adjacent`/`wildcat`) phrases, retired
+ * queries excluded — stamp their `lastRunAt` so the next run rotates to different
+ * phrases, and insert the `scoutRuns` heartbeat row. Picking + stamping share one
+ * transaction so concurrent runs can't select the same phrases. `lastRunAt` is
+ * stamped at pick time (a picked query is a run query), so even a run that later
+ * aborts still advances the rotation. Returns the run id and the chosen queries.
+ *
+ * Retired queries drift to the front of the LRU index (their `lastRunAt` freezes
+ * once they stop being picked), so the scan skips them explicitly rather than
+ * letting them crowd out live phrases. It streams `by_lastRunAt` and stops as
+ * soon as both slices could be filled to target, so a healthy pool reads only a
+ * little past the front; it falls back to scanning the rest only when a slice is
+ * chronically short (then borrowing needs to see every live candidate anyway).
+ * The live candidates go to the pure `selectRunQueries` for the split/borrow
+ * decision.
  */
 export const beginScoutRun = internalMutation({
-	args: { queriesPerRun: v.number() },
+	args: {
+		seededPerRun: v.number(),
+		explorationPerRun: v.number(),
+		retirementThreshold: v.number(),
+	},
 	handler: async (
 		ctx,
-		{ queriesPerRun },
-	): Promise<{ runId: Id<"scoutRuns">; queries: string[] }> => {
+		{ seededPerRun, explorationPerRun, retirementThreshold },
+	): Promise<{ runId: Id<"scoutRuns">; queries: PickedQuery[] }> => {
 		const now = Date.now();
-		const picked = await ctx.db
+
+		// Stream LRU-first, skipping retired, until both slices could be filled to
+		// target (or the pool is exhausted — then borrowing fills the shortfall).
+		const candidates: Doc<"searchQueries">[] = [];
+		let liveSeeded = 0;
+		let liveExploration = 0;
+		for await (const query of ctx.db
 			.query("searchQueries")
 			.withIndex("by_lastRunAt")
-			.order("asc")
-			.take(queriesPerRun);
+			.order("asc")) {
+			if (isRetired(query.consecutiveZeroYield, retirementThreshold)) {
+				continue;
+			}
+			candidates.push(query);
+			if (query.origin === "seeded") {
+				liveSeeded++;
+			} else {
+				liveExploration++;
+			}
+			if (liveSeeded >= seededPerRun && liveExploration >= explorationPerRun) {
+				break;
+			}
+		}
+
+		const picked = selectRunQueries(candidates, {
+			seededPerRun,
+			explorationPerRun,
+			retirementThreshold,
+		});
 		for (const query of picked) {
 			await ctx.db.patch("searchQueries", query._id, { lastRunAt: now });
 		}
@@ -87,7 +132,13 @@ export const beginScoutRun = internalMutation({
 			channelsSubmitted: 0,
 			estimatedQuotaUnits: 0,
 		});
-		return { runId, queries: picked.map((query) => query.phrase) };
+		return {
+			runId,
+			queries: picked.map((query) => ({
+				queryId: query._id,
+				phrase: query.phrase,
+			})),
+		};
 	},
 });
 
@@ -139,6 +190,44 @@ export const createScoutSubmissions = internalMutation({
 });
 
 /**
+ * Fold each searched query's yield back into the pool (CONTEXT.md: Niche Query).
+ * A query that surfaced at least one *unseen* Channel this run has its
+ * consecutive-zero-yield counter reset; one that surfaced none advances toward
+ * retirement. "Unseen" is the free already-tracked DB check the run already ran —
+ * so yield is decided before any hydration/floor, and a query is credited for
+ * finding a new channel even if that channel was later ranked out. Only queries
+ * whose `search.list` actually succeeded are passed here: a transient search
+ * failure is left out upstream, so a hiccup never counts toward retirement. The
+ * counter is recomputed from each row's *current* value, so a row deleted mid-run
+ * is skipped (the get returns null); a barren run's increment is idempotent under
+ * the `next !== current` guard only against a re-run, not against a concurrent
+ * re-mint (a revival racing this write can be clobbered — an acceptable rarity,
+ * since the next enrichment re-mints again).
+ */
+export const applyQueryYields = internalMutation({
+	args: {
+		updates: v.array(
+			v.object({ queryId: v.id("searchQueries"), yielded: v.boolean() }),
+		),
+	},
+	handler: async (ctx, { updates }): Promise<null> => {
+		for (const { queryId, yielded } of updates) {
+			const query = await ctx.db.get("searchQueries", queryId);
+			if (query === null) {
+				continue;
+			}
+			const next = nextZeroYield(query.consecutiveZeroYield, yielded);
+			if (next !== query.consecutiveZeroYield) {
+				await ctx.db.patch("searchQueries", queryId, {
+					consecutiveZeroYield: next,
+				});
+			}
+		}
+		return null;
+	},
+});
+
+/**
  * Settle the run's heartbeat: stamp `finishedAt` and the final counters. `error`
  * is passed only when an aborting failure cut the run short — the partial counters
  * tallied up to that point are still recorded, so a dead run is distinguishable
@@ -182,9 +271,13 @@ export async function runScoutRun(
 	adapter: YouTubeAdapter,
 	config: ScoutConfig,
 ): Promise<Id<"scoutRuns">> {
-	const { runId, queries }: { runId: Id<"scoutRuns">; queries: string[] } =
+	// Same-file runMutation: annotate the return to sidestep TS circularity
+	// (guidelines.md §Function calling), matching the sibling calls below.
+	const { runId, queries }: { runId: Id<"scoutRuns">; queries: PickedQuery[] } =
 		await ctx.runMutation(internal.scout.beginScoutRun, {
-			queriesPerRun: config.queriesPerRun,
+			seededPerRun: config.seededPerRun,
+			explorationPerRun: config.explorationPerRun,
+			retirementThreshold: config.retirementThreshold,
 		});
 
 	const publishedAfter = Date.now() - config.recentWindowDays * DAY_MS;
@@ -195,21 +288,32 @@ export async function runScoutRun(
 
 	try {
 		// 1. Search each query. A transient search.list failure skips just that
-		//    query; quota exhaustion aborts the whole run (rethrown below).
+		//    query; quota exhaustion aborts the whole run (rethrown below). Keep the
+		//    channels each *successfully-searched* query surfaced, so retirement can
+		//    credit or penalize it below — a skipped query is simply left out.
 		const refs: CandidateRef[] = [];
-		for (const query of queries) {
+		const searched: {
+			queryId: Id<"searchQueries">;
+			channelIds: string[];
+		}[] = [];
+		for (const { queryId, phrase } of queries) {
 			quotaUnits += SEARCH_QUOTA_UNITS;
 			try {
-				const hits = await adapter.searchRecentShorts(query, {
+				const hits = await adapter.searchRecentShorts(phrase, {
 					publishedAfter,
 					maxResults: config.searchResultsPerQuery,
 				});
 				refs.push(...hits);
+				searched.push({
+					queryId,
+					channelIds: hits.map((hit) => hit.ytChannelId),
+				});
 			} catch (error) {
 				if (error instanceof QuotaExceededError) {
 					throw error;
 				}
-				// Any other search failure is a transient hiccup for this one query.
+				// Any other search failure is a transient hiccup for this one query:
+				// it isn't recorded, so it never counts toward retirement.
 			}
 		}
 		candidatesSeen = refs.length;
@@ -247,6 +351,17 @@ export async function runScoutRun(
 				quotaUnits += channelsSubmitted * INGEST_QUOTA_UNITS;
 			}
 		}
+
+		// 5. Self-prune: a query that surfaced an unseen channel resets its
+		//    zero-yield counter; one that surfaced none advances toward retirement.
+		//    Only on the clean path — an aborted run records no retirement changes,
+		//    so the next run starts fresh.
+		await ctx.runMutation(internal.scout.applyQueryYields, {
+			updates: searched.map(({ queryId, channelIds }) => ({
+				queryId,
+				yielded: channelIds.some((id) => untracked.has(id)),
+			})),
+		});
 	} catch (error) {
 		abortError =
 			error instanceof QuotaExceededError
