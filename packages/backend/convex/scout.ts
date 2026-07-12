@@ -31,7 +31,9 @@ import {
 	internalAction,
 	internalMutation,
 	internalQuery,
+	query,
 } from "./_generated/server";
+import { requireAdmin } from "./admin";
 import { liveYouTubeAdapter } from "./ingest";
 import {
 	DEFAULT_SCOUT_CONFIG,
@@ -58,6 +60,54 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_QUOTA_UNITS = 100;
 const HYDRATION_QUOTA_UNITS_PER_BATCH = 1;
 const INGEST_QUOTA_UNITS = 4;
+
+/** Recent Scout runs returned to the admin heartbeat panel, newest-first. Tunable. */
+const SCOUT_RUN_LIST_LIMIT = 20;
+
+// --- Admin-facing heartbeat query -----------------------------------------------
+
+/** One row of the Scout heartbeat panel — a `scoutRuns` doc flattened with its
+ * optional fields nulled so the admin table renders a dead-or-alive Scout at a
+ * glance (issue #83). */
+export type ScoutRunRow = {
+	_id: Id<"scoutRuns">;
+	_creationTime: number;
+	startedAt: number;
+	finishedAt: number | null;
+	queriesUsed: number;
+	candidatesSeen: number;
+	channelsSubmitted: number;
+	estimatedQuotaUnits: number;
+	error: string | null;
+};
+
+/** Recent Scout runs, newest-first, for the admin heartbeat panel. Admin-gated
+ * like the Submissions table — non-admins get nothing. Reads off `_creationTime`
+ * (default order): the Scout is global, so every admin sees the whole run history.
+ * This panel is v1's only Scout death signal (issue #83) — there is no alerting.
+ * A run still in flight has a null `finishedAt`; a run that aborted carries its
+ * `error` alongside the partial counters it managed to tally. */
+export const listScoutRuns = query({
+	args: {},
+	handler: async (ctx): Promise<ScoutRunRow[]> => {
+		await requireAdmin(ctx);
+		const rows = await ctx.db
+			.query("scoutRuns")
+			.order("desc")
+			.take(SCOUT_RUN_LIST_LIMIT);
+		return rows.map((row) => ({
+			_id: row._id,
+			_creationTime: row._creationTime,
+			startedAt: row.startedAt,
+			finishedAt: row.finishedAt ?? null,
+			queriesUsed: row.queriesUsed,
+			candidatesSeen: row.candidatesSeen,
+			channelsSubmitted: row.channelsSubmitted,
+			estimatedQuotaUnits: row.estimatedQuotaUnits,
+			error: row.error ?? null,
+		}));
+	},
+});
 
 // --- DB seam (internal mutations & query the orchestration drives) --------------
 
