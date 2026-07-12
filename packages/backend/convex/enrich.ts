@@ -270,10 +270,10 @@ export type WildcatRunResult = { status: "minted" | "failed"; minted: number };
 /**
  * Run the wildcat novelty injector: a single text-only Claude call proposes a
  * handful of unseeded short-form niches, which are minted into the Scout's pool
- * as `wildcat` origin (ADR-0008). Runnable as an internal action; a later cron
- * fires it daily. The adapter throw is caught, logged, and reported as `failed`
- * with nothing written — a wildcat failure is fully contained, mirroring how an
- * enrichment failure never fails a Submission. Because minting goes through the
+ * as `wildcat` origin (ADR-0008). Runnable as an internal action; the `crons.ts`
+ * registry fires it daily. The adapter throw is caught, logged, and reported as
+ * `failed` with nothing written — a wildcat failure is fully contained, mirroring
+ * how an enrichment failure never fails a Submission. Because minting goes through the
  * shared `mintNicheQuery` path, a proposal duplicating an existing phrase simply
  * revives it.
  */
