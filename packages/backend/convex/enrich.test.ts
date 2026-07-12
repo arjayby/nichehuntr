@@ -4,13 +4,14 @@ import { setup } from "../test/harness";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { runEnrichChannel } from "./enrich";
+import { runEnrichChannel, runWildcat } from "./enrich";
 import type {
 	EnrichmentAdapter,
 	EnrichmentInput,
 	EnrichmentNicheQuery,
 	EnrichmentResult,
 	Signals,
+	WildcatProposal,
 } from "./model/clonability";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -95,6 +96,8 @@ function stubEnrichment(
 			calls.push(input);
 			return resultFor(input);
 		},
+		// Unused by the enrich orchestration — the wildcat call has its own tests.
+		proposeWildcatQueries: async () => ({ phrases: [] }),
 	};
 	return { adapter, calls };
 }
@@ -114,6 +117,7 @@ function throwingEnrichment() {
 			calls.push(input);
 			throw new Error("Anthropic API error");
 		},
+		proposeWildcatQueries: async () => ({ phrases: [] }),
 	};
 	return { adapter, calls };
 }
@@ -489,6 +493,134 @@ describe("runEnrichChannel — minting Niche Queries into the Scout pool", () =>
 			await t.action((ctx) => runEnrichChannel(ctx, adapter, channelId)),
 		).toEqual({ status: "enriched" });
 		expect(await searchQueriesFor(t)).toHaveLength(0);
+	});
+});
+
+/** A stub enrichment adapter for the wildcat call: `proposeWildcatQueries`
+ * returns the given phrases, and `enrich` throws — so a test proves the wildcat
+ * run never touches the per-Channel scoring path. No network. */
+function stubWildcat(proposal: WildcatProposal) {
+	let enrichCalled = false;
+	const adapter: EnrichmentAdapter = {
+		enrich: async () => {
+			enrichCalled = true;
+			throw new Error("wildcat must not call enrich");
+		},
+		proposeWildcatQueries: async () => proposal,
+	};
+	return { adapter, enrichCalled: () => enrichCalled };
+}
+
+/** A wildcat adapter whose proposal call throws — to prove a wildcat failure is
+ * fully contained. */
+function throwingWildcat(): EnrichmentAdapter {
+	return {
+		enrich: async () => {
+			throw new Error("wildcat must not call enrich");
+		},
+		proposeWildcatQueries: async () => {
+			throw new Error("Anthropic API error");
+		},
+	};
+}
+
+describe("runWildcat — daily unseeded-niche novelty injector", () => {
+	it("mints proposed phrases into the pool as wildcat origin", async () => {
+		const { t } = await setup();
+		const { adapter, enrichCalled } = stubWildcat({
+			phrases: ["ai asmr shorts", "history in 60 seconds"],
+		});
+
+		const result = await t.action((ctx) => runWildcat(ctx, adapter));
+		expect(result).toEqual({ status: "minted", minted: 2 });
+		expect(enrichCalled()).toBe(false);
+
+		const rows = await searchQueriesFor(t);
+		expect(
+			rows
+				.map((row) => ({ phrase: row.phrase, origin: row.origin }))
+				.sort((a, b) => a.phrase.localeCompare(b.phrase)),
+		).toEqual([
+			{ phrase: "ai asmr shorts", origin: "wildcat" },
+			{ phrase: "history in 60 seconds", origin: "wildcat" },
+		]);
+		expect(rows.every((row) => row.consecutiveZeroYield === 0)).toBe(true);
+	});
+
+	it("dedupes against an existing phrase and revives it, preserving its origin", async () => {
+		const { t } = await setup();
+		// A pooled, enrichment-seeded phrase the Scout had been retiring.
+		await t.run((ctx) =>
+			ctx.db.insert("searchQueries", {
+				phrase: "reddit stories",
+				origin: "seeded",
+				consecutiveZeroYield: 3,
+			}),
+		);
+
+		// The wildcat proposes a case/whitespace variant of it, plus a fresh niche.
+		const { adapter } = stubWildcat({
+			phrases: ["  Reddit   Stories ", "cozy game longplay shorts"],
+		});
+		const result = await t.action((ctx) => runWildcat(ctx, adapter));
+		expect(result).toEqual({ status: "minted", minted: 2 });
+
+		const rows = await searchQueriesFor(t);
+		const byPhrase = Object.fromEntries(rows.map((row) => [row.phrase, row]));
+		expect(rows).toHaveLength(2);
+		// Revived: counter reset, but the original `seeded` origin is preserved.
+		expect(byPhrase["reddit stories"]).toMatchObject({
+			origin: "seeded",
+			consecutiveZeroYield: 0,
+		});
+		expect(byPhrase["cozy game longplay shorts"]).toMatchObject({
+			origin: "wildcat",
+			consecutiveZeroYield: 0,
+		});
+	});
+
+	it("skips phrases that normalize to empty without counting them", async () => {
+		const { t } = await setup();
+		const { adapter } = stubWildcat({
+			phrases: ["   \t\n ", "clip farm shorts"],
+		});
+
+		const result = await t.action((ctx) => runWildcat(ctx, adapter));
+		expect(result).toEqual({ status: "minted", minted: 1 });
+
+		const rows = await searchQueriesFor(t);
+		expect(rows.map((row) => row.phrase)).toEqual(["clip farm shorts"]);
+	});
+
+	it("contains an adapter failure — mints nothing and leaves the pool untouched", async () => {
+		const { t } = await setup();
+		// Pre-existing pool state that a failed wildcat run must not disturb.
+		await t.run((ctx) =>
+			ctx.db.insert("searchQueries", {
+				phrase: "existing niche",
+				origin: "seeded",
+				consecutiveZeroYield: 2,
+			}),
+		);
+
+		const result = await t.action((ctx) => runWildcat(ctx, throwingWildcat()));
+		expect(result).toEqual({ status: "failed", minted: 0 });
+
+		// The pool is exactly its prior state — no new rows, counter untouched.
+		const rows = await searchQueriesFor(t);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			phrase: "existing niche",
+			origin: "seeded",
+			consecutiveZeroYield: 2,
+		});
+		// No Submission or Scout run was created as a side effect.
+		const submissions = await t.run((ctx) =>
+			ctx.db.query("submissions").collect(),
+		);
+		expect(submissions).toHaveLength(0);
+		const runs = await t.run((ctx) => ctx.db.query("scoutRuns").collect());
+		expect(runs).toHaveLength(0);
 	});
 });
 

@@ -46,6 +46,7 @@ import {
 	type EnrichmentAdapter,
 	type EnrichmentInput,
 	type EnrichmentVideo,
+	type WildcatProposal,
 } from "./model/clonability";
 import { mintNicheQuery } from "./model/nicheQueries";
 import {
@@ -232,6 +233,67 @@ export async function runEnrichChannel(
 		nicheQueries: result.nicheQueries,
 	});
 	return { status: "enriched" };
+}
+
+// --- Wildcat: the Scout's daily unseeded-niche novelty injector ----------------
+
+/**
+ * Mint the wildcat call's proposed phrases into the Scout's pool as `wildcat`
+ * origin, through the shared write path (ADR-0008). Dedupe and revival apply
+ * exactly as for enrichment-minted phrases: a phrase already in the pool is
+ * revived (its zero-yield counter reset) rather than duplicated, keeping its
+ * original origin. Phrases that normalize to empty are skipped and not counted.
+ * Returns how many non-empty phrases were minted, for the run's log line.
+ */
+export const mintWildcatQueries = internalMutation({
+	args: { phrases: v.array(v.string()) },
+	handler: async (ctx, { phrases }): Promise<number> => {
+		let minted = 0;
+		for (const phrase of phrases) {
+			if (await mintNicheQuery(ctx, { phrase, origin: "wildcat" })) {
+				minted++;
+			}
+		}
+		return minted;
+	},
+});
+
+/**
+ * The outcome of a wildcat run, surfaced for the cron's log line. `minted` counts
+ * the non-empty phrases folded into the pool (deduped/revived downstream);
+ * `failed` means the adapter threw and nothing was written — deliberately
+ * isolated so a wildcat hiccup never touches a Submission, a Scout run, or the
+ * existing pool.
+ */
+export type WildcatRunResult = { status: "minted" | "failed"; minted: number };
+
+/**
+ * Run the wildcat novelty injector: a single text-only Claude call proposes a
+ * handful of unseeded short-form niches, which are minted into the Scout's pool
+ * as `wildcat` origin (ADR-0008). Runnable as an internal action; a later cron
+ * fires it daily. The adapter throw is caught, logged, and reported as `failed`
+ * with nothing written — a wildcat failure is fully contained, mirroring how an
+ * enrichment failure never fails a Submission. Because minting goes through the
+ * shared `mintNicheQuery` path, a proposal duplicating an existing phrase simply
+ * revives it.
+ */
+export async function runWildcat(
+	ctx: ActionCtx,
+	adapter: EnrichmentAdapter,
+): Promise<WildcatRunResult> {
+	let proposal: WildcatProposal;
+	try {
+		proposal = await adapter.proposeWildcatQueries();
+	} catch (error) {
+		console.error("wildcat proposal failed:", error);
+		return { status: "failed", minted: 0 };
+	}
+
+	const minted: number = await ctx.runMutation(
+		internal.enrich.mintWildcatQueries,
+		{ phrases: proposal.phrases },
+	);
+	return { status: "minted", minted };
 }
 
 // --- One-time launch sweep (seeds the Niche Query pool) ------------------------

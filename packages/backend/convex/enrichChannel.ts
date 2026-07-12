@@ -17,7 +17,12 @@
 import { v } from "convex/values";
 
 import { internalAction } from "./_generated/server";
-import { type EnrichChannelResult, runEnrichChannel } from "./enrich";
+import {
+	type EnrichChannelResult,
+	runEnrichChannel,
+	runWildcat,
+	type WildcatRunResult,
+} from "./enrich";
 import type { EnrichmentAdapter } from "./model/clonability";
 import { createAnthropicEnrichmentAdapter } from "./model/enrichment";
 
@@ -36,4 +41,18 @@ export const enrichChannelWorker = internalAction({
 	args: { channelId: v.id("channels") },
 	handler: async (ctx, { channelId }): Promise<EnrichChannelResult> =>
 		runEnrichChannel(ctx, liveEnrichmentAdapter(), channelId),
+});
+
+/**
+ * The Scout's daily wildcat novelty injector: a text-only Claude call proposing
+ * unseeded short-form niches, minted into the query pool as `wildcat` origin
+ * (ADR-0008). Runnable out-of-band via `convex run enrichChannel:wildcatWorker`;
+ * a later cron fires it daily. Wires the live enrichment adapter from env and
+ * hands it to the test-covered `runWildcat` orchestration, whose failure handling
+ * keeps a wildcat hiccup from touching anything else.
+ */
+export const wildcatWorker = internalAction({
+	args: {},
+	handler: async (ctx): Promise<WildcatRunResult> =>
+		runWildcat(ctx, liveEnrichmentAdapter()),
 });
