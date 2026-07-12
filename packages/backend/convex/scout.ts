@@ -12,8 +12,9 @@
  * (`model/youtube.ts`) is the network seam, `runScoutRun` is the tested
  * orchestration (driven with a stub adapter, no network), and the internal
  * mutations/queries it calls are the DB seam. Selection/ranking are pure model
- * functions (`model/scout.ts`). `scoutRunAction` wires the live adapter from env
- * and is triggered manually via `convex run` — no cron in this slice.
+ * functions (`model/scout.ts`). `scoutRunAction` wires the live adapter from env;
+ * the `crons.ts` registry fires it every 3 hours, and it stays runnable manually
+ * via `convex run` — a cron-fired run is identical to a manual one (ADR-0008).
  *
  * Each run writes one `scoutRuns` heartbeat row: when it started/finished, how
  * many queries it used, candidates it saw, channels it submitted, quota it
@@ -384,10 +385,12 @@ export async function runScoutRun(
 // --- Manual entrypoint ---------------------------------------------------------
 
 /**
- * The tracer-bullet trigger — run out-of-band via `convex run scout:scoutRunAction`
+ * The Scout's live trigger — fired every 3 hours by the `crons.ts` registry
+ * (ADR-0008) and also runnable out-of-band via `convex run scout:scoutRunAction`
  * (the same escape hatch as the admin bootstrap and the launch sweep). Wires the
- * live YouTube adapter from env and runs one Scout pass with the default config.
- * Kept thin: all logic lives in `runScoutRun`. No cron in this slice.
+ * live YouTube adapter from env and runs one Scout pass with the default config,
+ * so a cron-fired run is identical to a manual one. Kept thin: all logic lives in
+ * `runScoutRun`.
  */
 export const scoutRunAction = internalAction({
 	args: {},

@@ -46,10 +46,11 @@ export const enrichChannelWorker = internalAction({
 /**
  * The Scout's daily wildcat novelty injector: a text-only Claude call proposing
  * unseeded short-form niches, minted into the query pool as `wildcat` origin
- * (ADR-0008). Runnable out-of-band via `convex run enrichChannel:wildcatWorker`;
- * a later cron fires it daily. Wires the live enrichment adapter from env and
- * hands it to the test-covered `runWildcat` orchestration, whose failure handling
- * keeps a wildcat hiccup from touching anything else.
+ * (ADR-0008). Fired daily by the `crons.ts` registry and also runnable
+ * out-of-band via `convex run enrichChannel:wildcatWorker`. Wires the live
+ * enrichment adapter from env and hands it to the test-covered `runWildcat`
+ * orchestration, whose failure handling keeps a wildcat hiccup from touching
+ * anything else.
  */
 export const wildcatWorker = internalAction({
 	args: {},
