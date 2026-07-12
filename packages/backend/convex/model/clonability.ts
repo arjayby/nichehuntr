@@ -178,6 +178,14 @@ export type EnrichmentResult = {
 };
 
 /**
+ * What the text-only wildcat call returns: a handful of unseeded short-form niche
+ * search phrases with clone potential, proposed from scratch rather than from any
+ * Channel's niche. Minted into the Scout's pool as `wildcat` origin (CONTEXT.md:
+ * Niche Query) — the outside-the-echo-chamber novelty injector (ADR-0008).
+ */
+export type WildcatProposal = { phrases: string[] };
+
+/**
  * The seam the enrich action depends on. The real implementation makes a multimodal
  * Claude call (`enrichment.ts`); tests pass a stub so no network is hit — mirroring
  * the embeddings adapter.
@@ -186,6 +194,11 @@ export type EnrichmentAdapter = {
 	/** Score a short-form Channel and mint its Niche Queries from metadata +
 	 * thumbnails, in one multimodal call. */
 	enrich(input: EnrichmentInput): Promise<EnrichmentResult>;
+	/** Propose a handful of unseeded short-form niches with clone potential — a
+	 * small text-only call, no Channel input — to mint as `wildcat` Niche Queries.
+	 * The Scout's daily novelty injector, so seeded search alone isn't an echo
+	 * chamber (ADR-0008). */
+	proposeWildcatQueries(): Promise<WildcatProposal>;
 };
 
 /** NUL — it can't occur in channel metadata, so joining fingerprint fields with

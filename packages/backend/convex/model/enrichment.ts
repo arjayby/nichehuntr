@@ -25,6 +25,7 @@ import {
 	SIGNAL_DEFINITIONS,
 	SIGNAL_LABELS,
 	type Signals,
+	type WildcatProposal,
 } from "./clonability";
 
 /**
@@ -55,6 +56,15 @@ const OWN_NICHE_QUERY_LIMIT = 3;
 /** How many adjacent-niche (`adjacent`) query phrases to ask for and keep — the
  * outside-the-echo-chamber slice. */
 const ADJACENT_NICHE_QUERY_LIMIT = 2;
+
+/** How many unseeded `wildcat` phrases the daily novelty call proposes and keeps
+ * — a small handful is enough fresh exploration fuel per day (ADR-0008). */
+const WILDCAT_QUERY_LIMIT = 5;
+
+const WILDCAT_SYSTEM_PROMPT =
+	"You propose brand-new short-form YouTube niches worth cloning, invented from scratch — NOT derived from any specific existing channel. Each niche should be one an operator could mass-produce cheaply from a repeatable template with an effectively infinite supply of source material. Output YouTube search phrases an operator would type to find channels already working each niche. Favor genuinely novel or emerging spaces over obvious saturated ones. Be concrete and searchable. Always report via the record_wildcat_queries tool.";
+
+const WILDCAT_USER_PROMPT = `Propose ${WILDCAT_QUERY_LIMIT} short-form YouTube niches with strong clone potential, unseeded by any existing channel. Return each as a concrete YouTube search phrase (e.g. "ai asmr shorts", "history in 60 seconds"), not an abstract label.`;
 
 const SYSTEM_PROMPT =
 	"You assess a short-form YouTube channel as a *clone target*: how attractive it would be for an operator to build a new channel replicating its proven niche and format (not to buy it). Judge only Automatable, Transformative, and Improvable, grounded in the channel metadata, recent Shorts titles, and thumbnail images provided. You also propose YouTube search phrases that would surface other channels in the same and adjacent niches, to seed automated discovery. Be decisive and concise. Always report via the record_signals tool.";
@@ -113,6 +123,26 @@ function signalsSchema() {
 }
 
 /**
+ * JSON Schema for the record_wildcat_queries tool: a flat array of proposed
+ * unseeded niche search phrases. The count is clamped downstream (`collectPhrases`),
+ * since strict structured schemas don't express array length bounds.
+ */
+function wildcatSchema() {
+	return {
+		type: "object" as const,
+		properties: {
+			phrases: {
+				type: "array",
+				items: { type: "string" },
+				description: `${WILDCAT_QUERY_LIMIT} concrete YouTube search phrases for brand-new, unseeded short-form niches with clone potential (e.g. "ai asmr shorts"), not abstract labels.`,
+			},
+		},
+		required: ["phrases"],
+		additionalProperties: false,
+	};
+}
+
+/**
  * The prompt text: channel metadata, recent titles, and the scoring rubric. The
  * thumbnails ride alongside as image blocks so the model can judge production
  * quality and improvability from the covers themselves.
@@ -146,22 +176,18 @@ function buildUserText(input: EnrichmentInput): string {
 }
 
 /**
- * Coerce a tool-call array field into cleaned Niche Query phrases with the given
- * origin: keep only non-empty strings, trim them, drop case-insensitive
- * duplicates within the array, and cap the count. Canonical normalization and
- * cross-Channel dedupe happen later in the DB write path (`mintNicheQuery`); this
- * just maps the model output into the typed shape.
+ * Coerce a tool-call array field into cleaned search phrases: keep only non-empty
+ * strings, trim them, drop case-insensitive duplicates within the array, and cap
+ * the count. Canonical normalization and cross-Channel dedupe happen later in the
+ * DB write path (`mintNicheQuery`); this just maps the model output into clean
+ * phrase strings. Shared by the enrichment mint and the wildcat call.
  */
-function collectNicheQueries(
-	raw: unknown,
-	origin: EnrichmentNicheQuery["origin"],
-	limit: number,
-): EnrichmentNicheQuery[] {
+function collectPhrases(raw: unknown, limit: number): string[] {
 	if (!Array.isArray(raw)) {
 		return [];
 	}
 	const seen = new Set<string>();
-	const queries: EnrichmentNicheQuery[] = [];
+	const phrases: string[] = [];
 	for (const item of raw) {
 		if (typeof item !== "string") {
 			continue;
@@ -175,12 +201,22 @@ function collectNicheQueries(
 			continue;
 		}
 		seen.add(key);
-		queries.push({ phrase, origin });
-		if (queries.length >= limit) {
+		phrases.push(phrase);
+		if (phrases.length >= limit) {
 			break;
 		}
 	}
-	return queries;
+	return phrases;
+}
+
+/** Tag cleaned phrases (`collectPhrases`) with the origin they were minted
+ * through, for the enrichment write path's typed shape. */
+function collectNicheQueries(
+	raw: unknown,
+	origin: EnrichmentNicheQuery["origin"],
+	limit: number,
+): EnrichmentNicheQuery[] {
+	return collectPhrases(raw, limit).map((phrase) => ({ phrase, origin }));
 }
 
 /**
@@ -282,6 +318,34 @@ export function createAnthropicEnrichmentAdapter(
 					),
 				],
 			};
+		},
+
+		async proposeWildcatQueries(): Promise<WildcatProposal> {
+			const message = await client.messages.create({
+				model,
+				max_tokens: MAX_TOKENS,
+				system: WILDCAT_SYSTEM_PROMPT,
+				tools: [
+					{
+						name: "record_wildcat_queries",
+						description:
+							"Record the proposed unseeded short-form niche search phrases.",
+						input_schema: wildcatSchema(),
+						strict: true,
+					},
+				],
+				tool_choice: { type: "tool", name: "record_wildcat_queries" },
+				messages: [{ role: "user", content: WILDCAT_USER_PROMPT }],
+			});
+
+			const toolUse = message.content.find(
+				(block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+			);
+			if (!toolUse) {
+				throw new Error("wildcat: model did not return record_wildcat_queries");
+			}
+			const raw = (toolUse.input ?? {}) as Record<string, unknown>;
+			return { phrases: collectPhrases(raw.phrases, WILDCAT_QUERY_LIMIT) };
 		},
 	};
 }

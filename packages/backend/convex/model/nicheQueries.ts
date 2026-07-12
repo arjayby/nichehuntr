@@ -11,7 +11,14 @@
  */
 
 import type { MutationCtx } from "../_generated/server";
-import type { MintedNicheQuery } from "./validators";
+import type { NicheQueryOrigin } from "./validators";
+
+/** One phrase to mint into the pool: the search text plus the origin to stamp on
+ * a *new* row (a revival preserves the existing row's origin). Accepts the full
+ * `NicheQueryOrigin` set so every minting path shares this write path — the
+ * enrichment write path passes `seeded`/`adjacent`, the wildcat call passes
+ * `wildcat`. */
+export type PooledNicheQuery = { phrase: string; origin: NicheQueryOrigin };
 
 /**
  * Canonicalize a Niche Query phrase for storage and dedupe: trim the ends,
@@ -30,15 +37,18 @@ export function normalizeNicheQuery(phrase: string): string {
  * consecutive-zero-yield counter so a phrase the Scout had been retiring gets
  * another run — while preserving the row's original `origin` and `lastRunAt` (a
  * revival is a second chance, not a fresh phrase). A phrase that normalizes to
- * empty is skipped. Idempotent per normalized phrase.
+ * empty is skipped. Idempotent per normalized phrase. Returns whether the phrase
+ * was accepted into the pool (`true` when non-empty — inserted, revived, or
+ * already current) or skipped as empty (`false`), so a caller minting a batch can
+ * count what landed without re-normalizing.
  */
 export async function mintNicheQuery(
 	ctx: MutationCtx,
-	{ phrase, origin }: MintedNicheQuery,
-): Promise<void> {
+	{ phrase, origin }: PooledNicheQuery,
+): Promise<boolean> {
 	const normalized = normalizeNicheQuery(phrase);
 	if (normalized.length === 0) {
-		return;
+		return false;
 	}
 	const existing = await ctx.db
 		.query("searchQueries")
@@ -50,11 +60,12 @@ export async function mintNicheQuery(
 			origin,
 			consecutiveZeroYield: 0,
 		});
-		return;
+		return true;
 	}
 	if (existing.consecutiveZeroYield !== 0) {
 		await ctx.db.patch("searchQueries", existing._id, {
 			consecutiveZeroYield: 0,
 		});
 	}
+	return true;
 }
