@@ -1,6 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@nichehuntr/backend/convex/_generated/api";
 import type { Id } from "@nichehuntr/backend/convex/_generated/dataModel";
+import type { ScoutRunRow } from "@nichehuntr/backend/convex/scout";
 import type { SubmissionRow } from "@nichehuntr/backend/convex/submissions";
 import { Button } from "@nichehuntr/ui/components/button";
 import { Input } from "@nichehuntr/ui/components/input";
@@ -51,8 +52,115 @@ function AdminPage() {
 				</div>
 				<SubmitBox />
 				<SubmissionsTable />
+				<ScoutHeartbeat />
 			</div>
 		</main>
+	);
+}
+
+/** The Scout's heartbeat: recent `scoutRuns` newest-first, so a dead Scout is
+ * visible at a glance. No alerting — this panel is v1's only death signal (issue
+ * #83). Admin-gated by the same route guard as the Submissions table above. */
+function ScoutHeartbeat() {
+	return (
+		<section className="mt-10">
+			<div className="mb-3">
+				<h2 className="font-bold text-lg">Scout runs</h2>
+				<p className="text-muted-foreground text-sm">
+					The automated discoverer's recent runs, newest first. A stale top row
+					or an error is the only sign the Scout has stopped.
+				</p>
+			</div>
+			<ScoutRunsTable />
+		</section>
+	);
+}
+
+/** The live Scout-runs table — reactive, newest-first, counters + timestamps, with
+ * error text when a run aborted. */
+function ScoutRunsTable() {
+	const runs = useQuery(api.scout.listScoutRuns);
+
+	if (runs === undefined) {
+		return <Loader />;
+	}
+	if (runs.length === 0) {
+		return (
+			<p className="rounded-2xl border border-border border-dashed px-4 py-8 text-center text-muted-foreground text-sm">
+				No Scout runs yet.
+			</p>
+		);
+	}
+
+	return (
+		<div className="overflow-x-auto rounded-2xl border border-border">
+			<table className="w-full min-w-lg text-sm">
+				<thead>
+					<tr className="border-border border-b text-left text-muted-foreground text-xs">
+						<th className="px-4 py-2 font-medium">Started</th>
+						<th className="px-4 py-2 font-medium">Finished</th>
+						<th className="px-4 py-2 text-right font-medium">Queries</th>
+						<th className="px-4 py-2 text-right font-medium">Candidates</th>
+						<th className="px-4 py-2 text-right font-medium">Submitted</th>
+						<th className="px-4 py-2 text-right font-medium">Quota</th>
+						<th className="px-4 py-2 font-medium">Error</th>
+					</tr>
+				</thead>
+				<tbody>
+					{runs.map((run) => (
+						<tr key={run._id} className="border-border border-b last:border-0">
+							<td className="px-4 py-3 font-mono text-xs">
+								{runTimestamp.format(run.startedAt)}
+							</td>
+							<td className="px-4 py-3">
+								<FinishedCell run={run} />
+							</td>
+							<td className="px-4 py-3 text-right font-mono text-xs">
+								{run.queriesUsed}
+							</td>
+							<td className="px-4 py-3 text-right font-mono text-xs">
+								{run.candidatesSeen}
+							</td>
+							<td className="px-4 py-3 text-right font-mono text-xs">
+								{run.channelsSubmitted}
+							</td>
+							<td className="px-4 py-3 text-right font-mono text-xs">
+								{run.estimatedQuotaUnits}
+							</td>
+							<td className="max-w-xs px-4 py-3">
+								{run.error ? (
+									<span className="text-destructive text-xs">{run.error}</span>
+								) : (
+									<span className="text-muted-foreground" aria-hidden>
+										—
+									</span>
+								)}
+							</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+const runTimestamp = new Intl.DateTimeFormat("en", {
+	month: "short",
+	day: "numeric",
+	hour: "numeric",
+	minute: "2-digit",
+});
+
+/** The Finished column: a running row (no `finishedAt`) reads "Running…"; a
+ * settled one shows when it finished. */
+function FinishedCell({ run }: { run: ScoutRunRow }) {
+	if (run.finishedAt === null) {
+		return <span className="text-primary text-xs">Running…</span>;
+	}
+	return (
+		<span className="font-mono text-xs">
+			{runTimestamp.format(run.finishedAt)}
+		</span>
 	);
 }
 

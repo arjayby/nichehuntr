@@ -710,3 +710,102 @@ describe("runScoutRun — query pool lifecycle (issue #80)", () => {
 		expect((await queryRow(t, "q2"))?.consecutiveZeroYield).toBe(0);
 	});
 });
+
+describe("listScoutRuns — the admin heartbeat panel (issue #83)", () => {
+	/** Insert a `scoutRuns` heartbeat row directly, bypassing a full run. */
+	async function seedRun(
+		t: Awaited<ReturnType<typeof setup>>["t"],
+		fields: {
+			startedAt: number;
+			finishedAt?: number;
+			queriesUsed?: number;
+			candidatesSeen?: number;
+			channelsSubmitted?: number;
+			estimatedQuotaUnits?: number;
+			error?: string;
+		},
+	) {
+		return t.run((ctx) =>
+			ctx.db.insert("scoutRuns", {
+				startedAt: fields.startedAt,
+				finishedAt: fields.finishedAt,
+				queriesUsed: fields.queriesUsed ?? 0,
+				candidatesSeen: fields.candidatesSeen ?? 0,
+				channelsSubmitted: fields.channelsSubmitted ?? 0,
+				estimatedQuotaUnits: fields.estimatedQuotaUnits ?? 0,
+				error: fields.error,
+			}),
+		);
+	}
+
+	it("returns recent runs newest-first with counters and timestamps", async () => {
+		const { t, admin } = await setup();
+		const older = await seedRun(t, {
+			startedAt: 1_000,
+			finishedAt: 2_000,
+			queriesUsed: 5,
+			candidatesSeen: 40,
+			channelsSubmitted: 3,
+			estimatedQuotaUnits: 512,
+		});
+		const newer = await seedRun(t, {
+			startedAt: 10_000,
+			finishedAt: 11_000,
+			queriesUsed: 6,
+			candidatesSeen: 55,
+			channelsSubmitted: 4,
+			estimatedQuotaUnits: 604,
+		});
+
+		const rows = await admin.query(api.scout.listScoutRuns, {});
+		expect(rows.map((r) => r._id)).toEqual([newer, older]);
+		expect(rows[0]).toMatchObject({
+			startedAt: 10_000,
+			finishedAt: 11_000,
+			queriesUsed: 6,
+			candidatesSeen: 55,
+			channelsSubmitted: 4,
+			estimatedQuotaUnits: 604,
+			error: null,
+		});
+	});
+
+	it("nulls the optional fields of an in-flight run and surfaces an aborted run's error", async () => {
+		const { t, admin } = await setup();
+		await seedRun(t, { startedAt: 1_000 }); // still running: no finishedAt, no error
+		await seedRun(t, {
+			startedAt: 2_000,
+			finishedAt: 2_500,
+			candidatesSeen: 12,
+			error: "YouTube quota exhausted mid-run.",
+		});
+
+		const rows = await admin.query(api.scout.listScoutRuns, {});
+		// Newest-first: the aborted run, then the in-flight one.
+		expect(rows[0]).toMatchObject({
+			error: "YouTube quota exhausted mid-run.",
+			candidatesSeen: 12,
+		});
+		expect(rows[1]).toMatchObject({ finishedAt: null, error: null });
+	});
+
+	it("is empty before the Scout has ever run", async () => {
+		const { admin } = await setup();
+		expect(await admin.query(api.scout.listScoutRuns, {})).toEqual([]);
+	});
+
+	it("admin allowed, subscribed non-admin and anon rejected", async () => {
+		const { t, admin, operator } = await setup();
+		await seedRun(t, { startedAt: 1_000, finishedAt: 2_000 });
+
+		await expect(operator.query(api.scout.listScoutRuns, {})).rejects.toThrow(
+			/ADMIN_REQUIRED/,
+		);
+		await expect(t.query(api.scout.listScoutRuns, {})).rejects.toThrow(
+			/UNAUTHENTICATED/,
+		);
+		await expect(
+			admin.query(api.scout.listScoutRuns, {}),
+		).resolves.toHaveLength(1);
+	});
+});
